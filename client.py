@@ -107,10 +107,13 @@ def start_client():
     client_socket = socket.socket()
     client_socket.connect((HOST, PORT))
     client_socket.setblocking(False)
-
+    
+    clock = pygame.time.Clock()
+    
     # Main game loop
     global player_id
     running = True
+    previous_key = None
     while running:
         # print("going")
         for event in pygame.event.get():
@@ -124,20 +127,28 @@ def start_client():
             time.sleep(0.1)
             continue
 
-        # Handle arrow key input for movement
+        # Handle arrow key input for movement 
+        # Ignores input if previous_key is same as current input       
         keys = pygame.key.get_pressed()
-        if keys[pygame.K_UP]:
+        if keys[pygame.K_UP] and previous_key != keys[pygame.K_UP]:
             send_move(client_socket, "up")
-        elif keys[pygame.K_DOWN]:
+            previous_key = keys[pygame.K_UP]
+        elif keys[pygame.K_DOWN] and previous_key != [pygame.K_DOWN]:
             send_move(client_socket, "down")
-        elif keys[pygame.K_LEFT]:
+            previous_key = [pygame.K_DOWN]
+        elif keys[pygame.K_LEFT] and previous_key != [pygame.K_LEFT]:
             send_move(client_socket, "left")
-        elif keys[pygame.K_RIGHT]:
+            previous_key = [pygame.K_LEFT]
+        elif keys[pygame.K_RIGHT] and previous_key != [pygame.K_RIGHT]:
             send_move(client_socket, "right")
-        # Small delay to avoid flooding the server
-        # TODO: remove this and implement proper messaging
-        # movement should probably be sent periodically instead of being sent once per frame
-        time.sleep(1 / 30)
+            previous_key = [pygame.K_RIGHT]
+        else:
+            pass
+        
+        # Now game does not call the function send_move() if previous_key is same as current input       
+        
+        # Limits fps to maximum of 60 to save system performance
+        clock.tick(60)
     # Clean up
     pygame.quit()
 
