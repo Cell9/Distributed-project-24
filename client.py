@@ -1,10 +1,7 @@
-from queue import Queue
 import socket
 import json
-import threading
 import pygame  # Library for creating graphical interface
 import time
-import select
 
 # Server connection configuration
 HOST = input("server ip to connect to:")
@@ -49,25 +46,6 @@ def display_positions():
         pygame.draw.rect(screen, color, (position[0], position[1], 20, 20))
 
     pygame.display.flip()  # Update the display
-
-
-# # Listen for updates from the server
-# def listener_func(sock: socket.socket, recv_queue: Queue):
-#     try:
-#         while True:
-#             data = sock.recv(1024).decode()
-#             if data:
-#                 update = json.loads(data)
-#                 recv_queue.put(update)
-
-#     except (ConnectionResetError, json.JSONDecodeError) as e:
-#         print("Disconnected from the server.")
-#         raise e
-#     finally:
-#         sock.close()
-
-
-# def sender_func(sock: socket.socket, send_queue: Queue):
 
 
 def poll_and_act_update(client_socket: socket.socket):
@@ -158,9 +136,9 @@ def start_client():
             send_move(client_socket, "right")
         # Small delay to avoid flooding the server
         # TODO: remove this and implement proper messaging
+        # movement should probably be sent periodically instead of being sent once per frame
         time.sleep(1 / 30)
     # Clean up
-    # TODO: shut down threads?
     pygame.quit()
 
 
