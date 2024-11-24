@@ -1,31 +1,11 @@
+from queue import Queue
 import socket
 import json
+from threading import Thread
+from typing import Literal
 import pygame  # Library for creating graphical interface
 import time
-
-# Server connection configuration
-HOST = input("server ip to connect to:")
-# HOST = 'server ip here'
-PORT = 12345
-
-
-# Game state
-Position = tuple[int, int]
-positions: dict[
-    int, Position
-] = {}  # Dictionary to keep track of player positions locally
-player_id: None | int = None  # Unique identifier for the client
-
-# Initialize pygame
-pygame.init()
-WIDTH, HEIGHT = 600, 400
-screen = pygame.display.set_mode((WIDTH, HEIGHT))
-pygame.display.set_caption("Multiplayer Game")
-
-# Colors for players
-PLAYER_COLOR = (0, 128, 255)  # Blue
-OTHER_PLAYER_COLOR = (128, 128, 128)  # Gray
-
+from server import Connection
 
 # Display the game positions
 def display_positions():
@@ -48,44 +28,34 @@ def display_positions():
     pygame.display.flip()  # Update the display
 
 
-def poll_and_act_update(client_socket: socket.socket):
-    try:
-        data = client_socket.recv(1024).decode()
-    # no new data available
-    except BlockingIOError:
+def poll_and_act_update(in_queue: Queue[str]):
+    if in_queue.empty():
         return
-    if not data:
-        # no data indicates disconnection
-        print("server connection has disconnected")
-        # TODO: handle this?
-        exit(1)
+    data = in_queue.get()
     try:
-        # multiple updates may be received at once,
-        # and the server adds \n to end of each message
-        # so we can read line by line
-        updates = [json.loads(line) for line in data.splitlines()]
+        update = json.loads(data)
     except json.JSONDecodeError as e:
         print(f"received malformed data: {data}")
         raise e
 
-    for update in updates:
-        # Ensure these are treated as global variables
-        global positions, player_id
+    print("got update", update)
+    # Ensure these are treated as global variables
+    global positions, player_id
 
-        # Set player ID when first received from server
-        if "player_id" in update and player_id is None:
-            player_id = update["player_id"]
+    # Set player ID when first received from server
+    if "player_id" in update and player_id is None:
+        player_id = update["player_id"]
 
-        # Update player positions when received
-        if "players" in update:
-            positions = update["players"]
+    # Update player positions when received
+    if "players" in update:
+        positions = update["players"]
 
     # Update the display
     display_positions()
 
 
 # Send movement commands to the server via queue
-def send_move(client_socket: socket.socket, direction):
+def send_move(out_queue: Queue[str], direction: Literal["up", "down", "left", "right"]):
     print(
         f"player id: {player_id}, direction: {direction}"
     )  # Print some player data for test purposes
@@ -93,34 +63,51 @@ def send_move(client_socket: socket.socket, direction):
         print("putting")
         move_command = {"move": direction, "player_id": player_id}
         try:
-            # no timeout specified, this will block
-            message = json.dumps(move_command) + "\n"
-            print("sending")
-            client_socket.sendall(message.encode())
-        except (ConnectionResetError, json.JSONDecodeError) as e:
+            message = json.dumps(move_command)
+            out_queue.put(message)
+            
+        except (json.JSONDecodeError) as e:
             print("Disconnected from the server.")
             raise e
+        
+
+def thread_handler(sock: socket.socket, in_queue: Queue[str], out_queue: Queue[str]):
+    # TODO: handle crashing. This does not propagate errors to the main thread
+    conn = Connection(sock)
+    while True:
+        # TODO: should probably be more asynchronous. currently receiving and sending alternate
+        # as sockets aren't thread safe and it'd require more complex nonblocking logic to be more async
+        if not out_queue.empty():
+            conn.send_message(out_queue.get())
+        in_queue.put(conn.receive_message())
 
 
 # Main client function with pygame loop
 def start_client():
     client_socket = socket.socket()
     client_socket.connect((HOST, PORT))
-    client_socket.setblocking(False)
+
+    # we use a connection thread to avoid having to deal
+    # with the complexity of nonblocking sockets
+    in_queue = Queue()
+    out_queue = Queue()
+    conn_thread = Thread(target=thread_handler, args=(client_socket, in_queue, out_queue))
+    conn_thread.start()
     
-    clock = pygame.time.Clock()
+
+    # clock = pygame.time.Clock()
+
     
     # Main game loop
     global player_id
     running = True
     previous_key = None
     while running:
-        # print("going")
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
                 running = False
 
-        poll_and_act_update(client_socket)
+        poll_and_act_update(in_queue)
 
         # Wait for the server to send the player_id
         if player_id is None:
@@ -131,27 +118,47 @@ def start_client():
         # Ignores input if previous_key is same as current input       
         keys = pygame.key.get_pressed()
         if keys[pygame.K_UP] and previous_key != keys[pygame.K_UP]:
-            send_move(client_socket, "up")
+            print("up HELD DOWN SHSDFKHJSDFKHJKSKSDFJHJKSDFKHJFSDHJKDFKHJFSDKHSD")
+            send_move(out_queue, "up")
             previous_key = keys[pygame.K_UP]
         elif keys[pygame.K_DOWN] and previous_key != [pygame.K_DOWN]:
-            send_move(client_socket, "down")
+            send_move(out_queue, "down")
             previous_key = [pygame.K_DOWN]
         elif keys[pygame.K_LEFT] and previous_key != [pygame.K_LEFT]:
-            send_move(client_socket, "left")
+            send_move(out_queue, "left")
             previous_key = [pygame.K_LEFT]
         elif keys[pygame.K_RIGHT] and previous_key != [pygame.K_RIGHT]:
-            send_move(client_socket, "right")
+            send_move(out_queue, "right")
             previous_key = [pygame.K_RIGHT]
         else:
             pass
         
         # Now game does not call the function send_move() if previous_key is same as current input       
         
-        # Limits fps to maximum of 60 to save system performance
-        clock.tick(60)
     # Clean up
     pygame.quit()
 
 
 if __name__ == "__main__":
+        # Server connection configuration
+    HOST = input("server ip to connect to:")
+    # HOST = 'server ip here'
+    PORT = 12345
+
+    # Game state
+    Position = tuple[int, int]
+    positions: dict[
+        int, Position
+    ] = {}  # Dictionary to keep track of player positions locally
+    player_id: None | int = None  # Unique identifier for the client
+
+    # Initialize pygame
+    pygame.init()
+    WIDTH, HEIGHT = 600, 400
+    screen = pygame.display.set_mode((WIDTH, HEIGHT), vsync=1)
+    pygame.display.set_caption("Multiplayer Game")
+
+    # Colors for players
+    PLAYER_COLOR = (0, 128, 255)  # Blue
+    OTHER_PLAYER_COLOR = (128, 128, 128)  # Gray
     start_client()

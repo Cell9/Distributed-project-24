@@ -1,13 +1,9 @@
 import socket
+import struct
 import threading
 import json
 import time
 from typing import TypedDict
-
-# Server configurations
-HOST = input("server IP to bind to:")
-PORT = 12345
-
 
 # Game state and connected clients
 class PosStatus(TypedDict):
@@ -15,22 +11,84 @@ class PosStatus(TypedDict):
     position: tuple[int, int]
 
 
+class Connection:
+    "Wrapper for sockets to make sending full messages instead of streams easier"
+    sock: socket.socket
+    data_counter: int
+    buffer_in: bytearray
+    def __init__(self, sock):
+        self.sock = sock
+        self.data_counter = 0
+        self.buffer_in = bytearray()
+
+    def send_message(self, msg: str):
+        # encode header, which is 4 bytes and indicates data length
+        header = struct.pack("!L", len(msg))
+        # encode message
+        data = msg.encode()
+
+        frame = header + data
+
+        self.sock.sendall(frame)
+        print(f"sent message: {msg}")
+
+    def receive_message(self) -> str:
+        # first we need to receive header for length information
+        while len(self.buffer_in) < 4 and self.data_counter == 0:
+            print(self.buffer_in, self.data_counter)
+            self.buffer_in.extend(self.sock.recv(4 - len(self.buffer_in)))
+            # we have full header
+            if len(self.buffer_in) == 4:
+                    self.data_counter = struct.unpack("!L", self.buffer_in)[0]
+                    # clear buffer for actual message
+                    self.buffer_in.clear()
+
+        # receive actual message
+        while True:
+            print(self.data_counter)
+            data = self.sock.recv(self.data_counter)
+            if not data:
+                # connection is done and no more data will arrive
+                raise ConnectionResetError()
+            else:
+                self.buffer_in.extend(data)
+                self.data_counter -= len(data)
+                assert self.data_counter >= 0
+            
+            # there is still more data to be received in this message
+            # as we have not read length amount of bytes
+            if self.data_counter != 0:
+                continue
+
+            try:
+                message = self.buffer_in.decode()
+                
+                # reset state
+                self.buffer_in.clear()
+                self.data_counter = 0
+
+                print(f"received message: {message}")
+                return message
+            except UnicodeDecodeError as e:
+                print(
+                    f"Frame contained malformed unicode: {self.buffer_in}"
+                )
+                raise e
+
 players: dict[
     int, PosStatus
 ] = {}  # Stores each player's last direction and current position {player_id: {'last_direction': direction, 'position': (x, y)}}
 clients: list[
-    tuple[socket.socket, int]
+    tuple[Connection, int]
 ] = []  # List to keep track of connected clients (client_socket, player_id)
 
 
 # Send a message to all connected clients
-def broadcast(message, exclude_client=None):
-    # message delimiter
-    message += "\n"
+def broadcast(message: str, exclude_client=None):
     for client, addr in clients:
         if client != exclude_client:  # Exclude the client that sent the message
             try:
-                client.sendall(message.encode())
+                client.send_message(message)
             except BrokenPipeError:
                 print(f"Lost connection to {addr}. Removing from clients.")
                 clients.remove((client, addr))
@@ -40,7 +98,8 @@ def broadcast(message, exclude_client=None):
 def handle_client(client_socket):
     # Assign a new player ID to the client
     player_id = len(players) + 1
-    clients.append((client_socket, player_id))  # Add the client to the list
+    connection = Connection(client_socket)
+    clients.append((connection, player_id))  # Add the client to the list
     players[player_id] = {
         "position": (0, 0),
         "last_direction": None,
@@ -48,43 +107,39 @@ def handle_client(client_socket):
     print(f"Player {player_id} connected.")
 
     # Send player_id to the client
-    client_socket.sendall(json.dumps({"player_id": player_id}).encode())
+    connection.send_message(json.dumps({"player_id": player_id}))
 
     # Send the initial list of players to the client
-    broadcast(json.dumps({"players": players}), exclude_client=client_socket)
+    broadcast(json.dumps({"players": players}), exclude_client=connection)
 
     try:
         while True:
-            data = client_socket.recv(1024).decode()
-            if not data:
-                break
+            data = connection.receive_message()
 
-            commands = data.splitlines()
-            for command in commands:
-                # Process movement commands
-                try:
-                    command = json.loads(data)
-                except json.JSONDecodeError as e:
-                    print(
-                        f"Player {player_id} sent malformed JSON: {data} and {command}"
-                    )
-                    raise e
-                if "move" in command and "player_id" in command:
-                    # Verify the command is for the current player
-                    if command["player_id"] == player_id:
-                        # Update the last move direction
-                        players[player_id]["last_direction"] = command["move"]
+            # Process movement command
+            try:
+                command = json.loads(data)
+            except json.JSONDecodeError as e:
+                print(
+                    f"Player {player_id} sent malformed JSON: {data} and {command}"
+                )
+                raise e
+            if "move" in command and "player_id" in command:
+                # Verify the command is for the current player
+                if command["player_id"] == player_id:
+                    # Update the last move direction
+                    players[player_id]["last_direction"] = command["move"]
 
-                        # Broadcast updated positions to all clients
-                        print(players)  # Print the dict for test purposes
-                        broadcast(json.dumps({"players": players}))
+                    # Broadcast updated positions to all clients
+                    print(players)  # Print the dict for test purposes
+                    broadcast(json.dumps({"players": players}))
     except ConnectionResetError:
         print(f"Player {player_id} disconnected.")
 
     finally:
         # Cleanup on client disconnect
         del players[player_id]
-        clients.remove((client_socket, player_id))
+        clients.remove((connection, player_id))
         client_socket.close()
         print(f"Player {player_id} connection closed.")
         # Broadcast updated player list to remaining clients
@@ -94,7 +149,7 @@ def handle_client(client_socket):
 # Server's game loop for handling movements every second
 def update_positions():
     while True:
-        time.sleep(1)  # Move players every 1 second
+        time.sleep(1/5)  # Move players every 1 second
 
         # Update each player's position based on their last command
         for player_id, player_data in players.items():
@@ -120,6 +175,10 @@ def update_positions():
 
 # Main server function
 def start_server():
+    # Server configurations
+    HOST = input("server IP to bind to:")
+    PORT = 12345
+
     server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     server_socket.bind((HOST, PORT))
     server_socket.listen()
