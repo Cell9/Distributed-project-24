@@ -7,6 +7,8 @@ import pygame  # Library for creating graphical interface
 import time
 from server import Connection
 
+known_peers = set() # For discovered peers/nodes
+
 # Display the game positions
 def display_positions():
     screen.fill((0, 0, 0))  # Clear screen with black background
@@ -81,9 +83,69 @@ def thread_handler(sock: socket.socket, in_queue: Queue[str], out_queue: Queue[s
             conn.send_message(out_queue.get())
         in_queue.put(conn.receive_message())
 
+def broadcast_ip():
+    try:
+        # Create a UDP socket
+        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM, socket.IPPROTO_UDP)
+        # Enable broadcast mode
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+        # Get the local IP address
+        hostname = socket.gethostname()           # On cs.helsinki VMs this gets svm-11 as the hostname instead of svm-11-2 or 11-3.
+        local_ip = socket.gethostbyname(hostname) # The 'fix' is to replace local_ip with the svm-11-2 or 11-3 ip addresses manually.
+
+        broadcast_address = ('<broadcast>', 50000)  # Use port 50000 for broadcasting
+
+        game_id = "asdf"  # ID to send with the IP. TODO: come up with a better id.
+        
+        print(f"Broadcasting IP and ID: {local_ip}, {game_id}")
+        while True:
+            # Send the IP address and ID as a broadcast message
+            message = f"{local_ip},{game_id}".encode('utf-8')
+            sock.sendto(message, broadcast_address)
+            time.sleep(5)  # Broadcast every 5 seconds
+
+    except Exception as e:
+        print(f"Error in broadcasting: {e}")
+
+def listen_for_broadcasts():
+    try:
+        # Create a UDP socket
+        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM, socket.IPPROTO_UDP)
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        # Bind the socket to listen on all interfaces and port 50000
+        sock.bind(("", 50000))
+
+        print("Listening for broadcasts on port 50000...")
+
+        while True:
+            # Receive data and address from the sender
+            data, addr = sock.recvfrom(1024)  # Buffer size is 1024 bytes
+            message = data.decode('utf-8')
+            sender_ip, sender_id = message.split(',')
+            
+            if sender_ip not in known_peers and sender_id == 'asdf':
+                print(f"Received broadcast from: IP={sender_ip}, ID={sender_id}")
+                known_peers.add(sender_ip)
+                
+            else:
+                pass
+           
+            print(known_peers) # TODO: Remove this after testing
+                  
+    except Exception as e:
+        print(f"Error in listening: {e}")
+
 
 # Main client function with pygame loop
 def start_client():
+    
+    broadcast_thread = Thread(target=broadcast_ip, daemon=True)
+    listen_thread = Thread(target=listen_for_broadcasts, daemon=True)
+
+    print("Starting both broadcasting and listening...")
+    broadcast_thread.start()
+    listen_thread.start()
+    
     client_socket = socket.socket()
     client_socket.connect((HOST, PORT))
 
@@ -93,10 +155,6 @@ def start_client():
     out_queue = Queue()
     conn_thread = Thread(target=thread_handler, args=(client_socket, in_queue, out_queue))
     conn_thread.start()
-    
-
-    # clock = pygame.time.Clock()
-
     
     # Main game loop
     global player_id
@@ -118,7 +176,7 @@ def start_client():
         # Ignores input if previous_key is same as current input       
         keys = pygame.key.get_pressed()
         if keys[pygame.K_UP] and previous_key != keys[pygame.K_UP]:
-            print("up HELD DOWN SHSDFKHJSDFKHJKSKSDFJHJKSDFKHJFSDHJKDFKHJFSDKHSD")
+            print("up")
             send_move(out_queue, "up")
             previous_key = keys[pygame.K_UP]
         elif keys[pygame.K_DOWN] and previous_key != [pygame.K_DOWN]:
@@ -140,7 +198,8 @@ def start_client():
 
 
 if __name__ == "__main__":
-        # Server connection configuration
+
+    # Server connection configuration
     HOST = input("server ip to connect to:")
     # HOST = 'server ip here'
     PORT = 12345
