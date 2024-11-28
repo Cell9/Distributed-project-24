@@ -27,7 +27,13 @@ def display_positions():
             color = OTHER_PLAYER_COLOR  # Other players' color
         pygame.draw.rect(screen, color, (position[0], position[1], 20, 20))
 
+        #draw target, in progress
+        #draw_target(300,200)
+
     pygame.display.flip()  # Update the display
+
+def draw_target(x_pos, y_pos):
+    pygame.draw.rect(screen, TARGET_COLOR, (x_pos, y_pos, 20, 20))
 
 
 def poll_and_act_update(in_queue: Queue[str]):
@@ -220,4 +226,5 @@ if __name__ == "__main__":
     # Colors for players
     PLAYER_COLOR = (0, 128, 255)  # Blue
     OTHER_PLAYER_COLOR = (128, 128, 128)  # Gray
+    TARGET_COLOR = (255, 0, 0) # Red
     start_client()
