@@ -10,7 +10,8 @@ from typing import TypedDict
 class PosStatus(TypedDict):
     last_direction: str
     position: tuple[int, int]
-
+    points: int
+    games_won: int
 
 class Connection:
     "Wrapper for sockets to make sending full messages instead of streams easier"
@@ -108,6 +109,8 @@ def handle_client(client_socket):
     players[player_id] = {
         "position": (0, 0),
         "last_direction": None,
+        "points": 0,
+        "games_won": 0
     }  # Initialize player position and last direction
     print(f"Player {player_id} connected.")
 
@@ -222,9 +225,20 @@ def check_collision(player_x, player_y, object_x, object_y):
     else: 
         return False
 
-# despawn gatherable    
+# despawn gatherable, gives points, check if player has enough to win
 def kill_gatherable(player_id):
+    players[player_id]['points'] += 1
     print(f"I am slain by player {str(player_id)}, summon another gatherable!")
+    if players[player_id]['points'] >= POINT_LIMIT:
+        round_reset(player_id)
+
+# when a player has enough points it wins the round and points are reset
+def round_reset(player_id):
+    players[player_id]['games_won'] += 1
+    print(f"Player {str(player_id)} wins the round!")
+    for player_id, player_data in players.items():
+        player_data["points"] = 0
+
 
 # return True if there is player cube in this location
 def player_pos_check(x_pos, y_pos):
@@ -286,4 +300,5 @@ def start_server():
 if __name__ == "__main__":
     # Coordinate destrictions (client's pygame draws 600x400)
     X_MIN, X_MAX, Y_MIN, Y_MAX = 0, 580, 0, 380
+    POINT_LIMIT = 5
     start_server()
