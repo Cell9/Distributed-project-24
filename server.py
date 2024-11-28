@@ -3,6 +3,7 @@ import struct
 import threading
 import json
 import time
+import random
 from typing import TypedDict
 
 # Game state and connected clients
@@ -30,12 +31,14 @@ class Connection:
         frame = header + data
 
         self.sock.sendall(frame)
-        print(f"sent message: {msg}")
+        # message print for testing purposes
+        #print(f"sent message: {msg}")
 
     def receive_message(self) -> str:
         # first we need to receive header for length information
         while len(self.buffer_in) < 4 and self.data_counter == 0:
-            print(self.buffer_in, self.data_counter)
+            # print for testing purposes
+            #print(self.buffer_in, self.data_counter)
             self.buffer_in.extend(self.sock.recv(4 - len(self.buffer_in)))
             # we have full header
             if len(self.buffer_in) == 4:
@@ -45,7 +48,8 @@ class Connection:
 
         # receive actual message
         while True:
-            print(self.data_counter)
+            # print for testing purposes
+            #print(self.data_counter)
             data = self.sock.recv(self.data_counter)
             if not data:
                 # connection is done and no more data will arrive
@@ -67,7 +71,8 @@ class Connection:
                 self.buffer_in.clear()
                 self.data_counter = 0
 
-                print(f"received message: {message}")
+                # print received message for testing purposes
+                #print(f"received message: {message}")
                 return message
             except UnicodeDecodeError as e:
                 print(
@@ -131,7 +136,7 @@ def handle_client(client_socket):
                     players[player_id]["last_direction"] = command["move"]
 
                     # Broadcast updated positions to all clients
-                    print(players)  # Print the dict for test purposes
+                    #print(players)  # Print the dict for test purposes
                     broadcast(json.dumps({"players": players}))
     except ConnectionResetError:
         print(f"Player {player_id} disconnected.")
@@ -148,6 +153,7 @@ def handle_client(client_socket):
 
 # Server's game loop for handling movements every second
 def update_positions():
+    gatherables = 0
     while True:
         increment = 10
         time.sleep(1/5)  # Move players every 1 second
@@ -174,8 +180,62 @@ def update_positions():
             # Update player position
             players[player_id]["position"] = (x, y)
 
+        # spawn gatherable if needed (only 1 gatherable supported at the moment)
+        if gatherables <= 0:
+            spawn_x, spawn_y = spawn_gatherable(increment)
+            gatherables = gatherables + 1
+            print(f"Gatherable spawned at: {spawn_x, spawn_y}")
+        
+        # check if any player is colliding with the gatherable
+        if gatherable_kill_check(spawn_x, spawn_y):
+            gatherables = gatherables - 1
+        
         # Broadcast updated positions to all clients
         broadcast(json.dumps({"players": players}))
+
+# Spawns gatherable objective
+def spawn_gatherable(increment):
+    tries = 0
+    while True and tries < 1000:
+        x_pos = random.randint(int(X_MIN/increment),int(X_MAX/increment))*increment
+        y_pos = random.randint(int(Y_MIN/increment),int(Y_MAX/increment))*increment
+        if not player_pos_check(x_pos, y_pos):
+            return (x_pos, y_pos)
+        tries = tries + 1
+    return (x_pos, y_pos)
+
+# gatherable collision check for all players
+def gatherable_kill_check(gatherable_x, gatherable_y):
+    for player_id, player_data in players.items():
+        x, y = player_data["position"]
+        if check_collision(x,y,gatherable_x, gatherable_y):
+            kill_gatherable(player_id)
+            #print(player_id)
+            return True
+    else:
+        return False
+
+# check if player collides on object based on coordinates
+def check_collision(player_x, player_y, object_x, object_y):
+    if player_x == object_x and player_y == object_y:
+        return True
+    else: 
+        return False
+
+# despawn gatherable    
+def kill_gatherable(player_id):
+    print(f"I am slain by player {str(player_id)}, summon another gatherable!")
+
+# return True if there is player cube in this location
+def player_pos_check(x_pos, y_pos):
+    check_list = []
+    for player_id, player_data in players.items():
+        x, y = player_data["position"]
+        check_list.append((x,y))
+    if (x_pos, y_pos) in check_list:
+        return True
+    else:
+        return False
 
 # Check if player moving out of bounds
 def border_check(coord, type, direction, increment):
