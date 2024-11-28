@@ -149,6 +149,7 @@ def handle_client(client_socket):
 # Server's game loop for handling movements every second
 def update_positions():
     while True:
+        increment = 10
         time.sleep(1/5)  # Move players every 1 second
 
         # Update each player's position based on their last command
@@ -158,13 +159,17 @@ def update_positions():
 
             # Move the player based on the last direction
             if direction == "up":
-                y -= 10
+                if border_check(y,"y", "up", increment):
+                    y -= increment
             elif direction == "down":
-                y += 10
+                if border_check(y,"y", "down", increment):
+                    y += increment
             elif direction == "left":
-                x -= 10
+                if border_check(x,"x", "left", increment):
+                    x -= increment
             elif direction == "right":
-                x += 10
+                if border_check(x,"x", "right", increment):
+                    x += increment
 
             # Update player position
             players[player_id]["position"] = (x, y)
@@ -172,6 +177,28 @@ def update_positions():
         # Broadcast updated positions to all clients
         broadcast(json.dumps({"players": players}))
 
+# Check if player moving out of bounds
+def border_check(coord, type, direction, increment):
+    if type == "x" and direction == "left":
+        if coord - increment >= X_MIN:
+            return True
+        else:
+            return False
+    if type == "x" and direction == "right":
+        if coord + increment <= X_MAX:
+            return True
+        else:
+            return False
+    if type == "y" and direction == "down":
+        if coord + increment <= Y_MAX:
+            return True
+        else:
+            return False
+    if type == "y"  and direction == "up":
+        if coord - increment >= Y_MIN:
+            return True
+        else:
+            return False
 
 # Main server function
 def start_server():
@@ -197,4 +224,6 @@ def start_server():
 
 
 if __name__ == "__main__":
+    # Coordinate destrictions (client's pygame draws 600x400)
+    X_MIN, X_MAX, Y_MIN, Y_MAX = 0, 580, 0, 380
     start_server()
