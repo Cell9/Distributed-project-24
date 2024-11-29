@@ -6,8 +6,12 @@ from typing import Literal
 import pygame  # Library for creating graphical interface
 import time
 from server import Connection
+from logger import get_logger, logging
+import sys
 
 known_peers = set() # For discovered peers/nodes
+# Get the client logger, you can specify one even for a function as well
+logger = get_logger('client', level = logging.DEBUG)
 
 # Display the game positions
 def display_positions():
@@ -142,6 +146,20 @@ def listen_for_broadcasts():
         print(f"Error in listening: {e}")
 
 
+def start_broadcast_thread() -> Thread:
+    """Starts and returns the LAN broadcast thread used to send host discovery messages."""
+    broadcast_thread = Thread(target=broadcast_ip, daemon=True)
+    broadcast_thread.start()
+    logger.info("Starting broadcasting")
+    return broadcast_thread
+
+def start_broadcast_listening_thread() -> Thread:
+    """Starts and returns the LAN broadcast listening thread."""
+    listening_thread = Thread(target=listen_for_broadcasts, daemon=True)
+    listening_thread.start()
+    logger.info("Starting broadcast listening")
+    return listening_thread
+
 # Main client function with pygame loop
 def start_client():
     
@@ -204,27 +222,40 @@ def start_client():
 
 
 if __name__ == "__main__":
+    # Handle command line arguments first
+    cmdline_args = set(sys.argv[1:])
 
-    # Server connection configuration
-    HOST = input("server ip to connect to:")
-    # HOST = 'server ip here'
-    PORT = 12345
+    if 'broadcast' in cmdline_args:
+        # Only broadcast, for testing/debugging
+        bcast_t = start_broadcast_thread()
+        start_broadcast_listening_thread()
+        bcast_t.join()
+    elif 'bully' in cmdline_args:
+        # Test/debug bully algorithm
+        pass
+    else:
+        # Start the client
 
-    # Game state
-    Position = tuple[int, int]
-    positions: dict[
-        int, Position
-    ] = {}  # Dictionary to keep track of player positions locally
-    player_id: None | int = None  # Unique identifier for the client
+        # Server connection configuration
+        HOST = input("server ip to connect to:")
+        # HOST = 'server ip here'
+        PORT = 12345
 
-    # Initialize pygame
-    pygame.init()
-    WIDTH, HEIGHT = 600, 400
-    screen = pygame.display.set_mode((WIDTH, HEIGHT), vsync=1)
-    pygame.display.set_caption("Multiplayer Game")
+        # Game state
+        Position = tuple[int, int]
+        positions: dict[
+            int, Position
+        ] = {}  # Dictionary to keep track of player positions locally
+        player_id: None | int = None  # Unique identifier for the client
 
-    # Colors for players
-    PLAYER_COLOR = (0, 128, 255)  # Blue
-    OTHER_PLAYER_COLOR = (128, 128, 128)  # Gray
-    TARGET_COLOR = (255, 0, 0) # Red
-    start_client()
+        # Initialize pygame
+        pygame.init()
+        WIDTH, HEIGHT = 600, 400
+        screen = pygame.display.set_mode((WIDTH, HEIGHT), vsync=1)
+        pygame.display.set_caption("Multiplayer Game")
+
+        # Colors for players
+        PLAYER_COLOR = (0, 128, 255)  # Blue
+        OTHER_PLAYER_COLOR = (128, 128, 128)  # Gray
+        TARGET_COLOR = (255, 0, 0) # Red
+        start_client()
