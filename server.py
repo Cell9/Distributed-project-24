@@ -37,6 +37,9 @@ def broadcast(message: str, exclude_client=None):
 
 # Handle each client connection
 def handle_client(client_socket):
+    # set new player joined to True for sending other than positions data
+    global new_player_joined
+    new_player_joined = True
     # Assign a new player ID to the client
     player_id = len(players) + 1
     connection = Connection(client_socket)
@@ -91,7 +94,9 @@ def handle_client(client_socket):
 
 # Server's game loop for handling movements every second
 def update_positions():
+    gatherable_change = False
     gatherable_counter = 0
+    global new_player_joined
     while True:
         increment = 10
         time.sleep(1/5)  # Move players every 1 second
@@ -120,12 +125,14 @@ def update_positions():
 
         # spawn gatherable if needed (only 1 gatherable supported at the moment)
         if len(gatherables) < GATHERABLE_LIMIT:
-            spawn_x, spawn_y = spawn_gatherable(increment)
-            print(f"Gatherable spawned at: {spawn_x, spawn_y}")
-            #print(len(gatherables))
-            gatherable_counter = gatherable_counter + 1
-            gatherable_id = str(gatherable_counter + 1)
-            gatherables[gatherable_id] = (spawn_x, spawn_y)
+            while len(gatherables) < GATHERABLE_LIMIT:
+                gatherable_change = True
+                spawn_x, spawn_y = spawn_gatherable(increment)
+                print(f"Gatherable spawned at: {spawn_x, spawn_y}")
+                #print(len(gatherables))
+                gatherable_counter = gatherable_counter + 1
+                gatherable_id = str(gatherable_counter + 1)
+                gatherables[gatherable_id] = (spawn_x, spawn_y)
         
         gatherable_kill_check(spawn_x, spawn_y)
         #print(len(gatherables))
@@ -135,7 +142,14 @@ def update_positions():
 
         # Broadcast gatherable location to all clients
         #print(gatherables)
-        broadcast(json.dumps({"gatherables": gatherables}))
+        #print(new_player_joined)
+        if gatherable_change or new_player_joined:
+            print("Sending gatherable object info to clients")
+            broadcast(json.dumps({"gatherables": gatherables}))
+            gatherable_change = False
+            new_player_joined = False
+        else:
+            pass
 
 # Spawns gatherable objective
 def spawn_gatherable(increment):
@@ -248,4 +262,6 @@ if __name__ == "__main__":
     X_MIN, X_MAX, Y_MIN, Y_MAX = 0, 580, 0, 380
     POINT_LIMIT = 5
     GATHERABLE_LIMIT = 3
+    global new_player_joined
+    new_player_joined = False
     start_server()
