@@ -129,7 +129,7 @@ def listen_for_broadcasts():
             logger.debug(f"Known peers: {known_peers}")
                   
     except Exception as e:
-        logger.debug(f"Error in listening: {e}")
+        logger.error(f"Error in listening: {e}")
 
 
 def start_broadcast_thread() -> Thread:
