@@ -5,15 +5,12 @@ from threading import Thread
 from typing import Literal
 import pygame  # Library for creating graphical interface
 import time
-from server import Connection
 from logger import get_logger, logging
-import sys
-import uuid
+from network import broadcast_ip, listen_for_broadcasts, Connection
 
-known_peers = dict() # For discovered peers/nodes
+
 # Get the client logger, you can specify one even for a function as well
 logger = get_logger('client', level = logging.DEBUG)
-node_id = uuid.uuid1() # Generate a new unique node identifier
 
 # Display the game positions
 def display_positions():
@@ -108,75 +105,6 @@ def thread_handler(sock: socket.socket, in_queue: Queue[str], out_queue: Queue[s
             conn.send_message(out_queue.get())
         in_queue.put(conn.receive_message())
 
-bcast_logger = get_logger('broadcast', logging.DEBUG)
-
-def broadcast_ip():
-    try:
-        # Create a UDP socket
-        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM, socket.IPPROTO_UDP)
-        # Enable broadcast mode
-        sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
-        # Get the local IP address
-        hostname = socket.gethostname()           # On cs.helsinki VMs this gets svm-11 as the hostname instead of svm-11-2 or 11-3.
-        local_ip = socket.gethostbyname(hostname) # The 'fix' is to replace local_ip with the svm-11-2 or 11-3 ip addresses manually.
-        broadcast_address = ('<broadcast>', 50000)  # Use port 50000 for broadcasting
-
-        game_id = "asdf"  # ID to send with the IP. TODO: come up with a better id.
-        node_id_str = str(node_id)
-
-        bcast_logger.info(f"Broadcasting IP, Node_ID, Game_ID: {local_ip}, {node_id_str}, {game_id}")
-        while True:
-            # Send the IP address and ID as a broadcast message
-            message = f"{local_ip},{node_id_str},{game_id}".encode('utf-8')
-            sock.sendto(message, broadcast_address)
-            time.sleep(5)  # Broadcast every 5 seconds
-
-    except Exception as e:
-        bcast_logger.error(f"Error in broadcasting: {e}")
-
-def listen_for_broadcasts():
-    try:
-        # Create a UDP socket
-        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM, socket.IPPROTO_UDP)
-        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        # Bind the socket to listen on all interfaces and port 50000
-        sock.bind(("", 50000))
-
-        bcast_logger.info("Listening on port 50000...")
-
-        while True:
-            # Receive data and address from the sender
-            data, addr = sock.recvfrom(1024)  # Buffer size is 1024 bytes
-            message = data.decode('utf-8')
-            sender_ip, sender_id_str, game_id = message.split(',')
-            sender_id = uuid.UUID(sender_id_str)
-            
-            if sender_id not in known_peers and game_id == 'asdf':
-                bcast_logger.info(f"Received broadcast from: IP={sender_ip}, ID={sender_id_str}")
-                known_peers[sender_id] = sender_ip
-                
-            else:
-                pass
-            
-            bcast_logger.debug(f"Known peers: {known_peers}")
-                  
-    except Exception as e:
-        bcast_logger.debug(f"Error in listening: {e}")
-
-
-def start_broadcast_thread() -> Thread:
-    """Starts and returns the LAN broadcast thread used to send host discovery messages."""
-    broadcast_thread = Thread(target=broadcast_ip, daemon=True)
-    broadcast_thread.start()
-    logger.info("Starting broadcasting")
-    return broadcast_thread
-
-def start_broadcast_listening_thread() -> Thread:
-    """Starts and returns the LAN broadcast listening thread."""
-    listening_thread = Thread(target=listen_for_broadcasts, daemon=True)
-    listening_thread.start()
-    logger.info("Starting broadcast listening")
-    return listening_thread
 
 # Main client function with pygame loop
 def start_client():
@@ -240,40 +168,28 @@ def start_client():
 
 
 if __name__ == "__main__":
-    # Handle command line arguments first
-    cmdline_args = set(sys.argv[1:])
+    # Start the client
 
-    if 'broadcast' in cmdline_args:
-        # Only broadcast, for testing/debugging
-        bcast_t = start_broadcast_thread()
-        start_broadcast_listening_thread()
-        bcast_t.join()
-    elif 'bully' in cmdline_args:
-        # Test/debug bully algorithm
-        pass
-    else:
-        # Start the client
+    # Server connection configuration
+    HOST = input("server ip to connect to:")
+    # HOST = 'server ip here'
+    PORT = 12345
 
-        # Server connection configuration
-        HOST = input("server ip to connect to:")
-        # HOST = 'server ip here'
-        PORT = 12345
+    # Game state
+    Position = tuple[int, int]
+    positions: dict[
+        int, Position
+    ] = {}  # Dictionary to keep track of player positions locally
+    player_id: None | int = None  # Unique identifier for the client
 
-        # Game state
-        Position = tuple[int, int]
-        positions: dict[
-            int, Position
-        ] = {}  # Dictionary to keep track of player positions locally
-        player_id: None | int = None  # Unique identifier for the client
+    # Initialize pygame
+    pygame.init()
+    WIDTH, HEIGHT = 600, 400
+    screen = pygame.display.set_mode((WIDTH, HEIGHT), vsync=1)
+    pygame.display.set_caption("Multiplayer Game")
 
-        # Initialize pygame
-        pygame.init()
-        WIDTH, HEIGHT = 600, 400
-        screen = pygame.display.set_mode((WIDTH, HEIGHT), vsync=1)
-        pygame.display.set_caption("Multiplayer Game")
-
-        # Colors for players
-        PLAYER_COLOR = (0, 128, 255)  # Blue
-        OTHER_PLAYER_COLOR = (128, 128, 128)  # Gray
-        TARGET_COLOR = (255, 0, 0) # Red
-        start_client()
+    # Colors for players
+    PLAYER_COLOR = (0, 128, 255)  # Blue
+    OTHER_PLAYER_COLOR = (128, 128, 128)  # Gray
+    TARGET_COLOR = (255, 0, 0) # Red
+    start_client()

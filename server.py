@@ -1,10 +1,10 @@
 import socket
-import struct
 import threading
 import json
 import time
 import random
 from typing import TypedDict
+from network import Connection
 
 # Game state and connected clients
 class PosStatus(TypedDict):
@@ -12,74 +12,6 @@ class PosStatus(TypedDict):
     position: tuple[int, int]
     points: int
     games_won: int
-
-class Connection:
-    "Wrapper for sockets to make sending full messages instead of streams easier"
-    sock: socket.socket
-    data_counter: int
-    buffer_in: bytearray
-    def __init__(self, sock):
-        self.sock = sock
-        self.data_counter = 0
-        self.buffer_in = bytearray()
-
-    def send_message(self, msg: str):
-        # encode header, which is 4 bytes and indicates data length
-        header = struct.pack("!L", len(msg))
-        # encode message
-        data = msg.encode()
-
-        frame = header + data
-
-        self.sock.sendall(frame)
-        # message print for testing purposes
-        #print(f"sent message: {msg}")
-
-    def receive_message(self) -> str:
-        # first we need to receive header for length information
-        while len(self.buffer_in) < 4 and self.data_counter == 0:
-            # print for testing purposes
-            #print(self.buffer_in, self.data_counter)
-            self.buffer_in.extend(self.sock.recv(4 - len(self.buffer_in)))
-            # we have full header
-            if len(self.buffer_in) == 4:
-                    self.data_counter = struct.unpack("!L", self.buffer_in)[0]
-                    # clear buffer for actual message
-                    self.buffer_in.clear()
-
-        # receive actual message
-        while True:
-            # print for testing purposes
-            #print(self.data_counter)
-            data = self.sock.recv(self.data_counter)
-            if not data:
-                # connection is done and no more data will arrive
-                raise ConnectionResetError()
-            else:
-                self.buffer_in.extend(data)
-                self.data_counter -= len(data)
-                assert self.data_counter >= 0
-            
-            # there is still more data to be received in this message
-            # as we have not read length amount of bytes
-            if self.data_counter != 0:
-                continue
-
-            try:
-                message = self.buffer_in.decode()
-                
-                # reset state
-                self.buffer_in.clear()
-                self.data_counter = 0
-
-                # print received message for testing purposes
-                #print(f"received message: {message}")
-                return message
-            except UnicodeDecodeError as e:
-                print(
-                    f"Frame contained malformed unicode: {self.buffer_in}"
-                )
-                raise e
 
 players: dict[
     int, PosStatus
