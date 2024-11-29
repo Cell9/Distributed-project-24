@@ -1,14 +1,45 @@
 import socket
 import struct
-from threading import Thread
+from threading import Thread, RLock
 import time
 from logger import get_logger, logging
 import sys
 import uuid
 
-known_peers = dict() # For discovered peers/nodes
-node_id = uuid.uuid1() # Generate a new unique node identifier
+class Peers:
+    """A wrapper class for accessing known peers in a threadsafe way."""
 
+    def __init__(self):
+        self._peers = dict()
+        self._lock = RLock()
+    
+    def __contains__(self, id):
+        with self._lock:
+            return id in self._peers
+    
+    def __getitem__(self, id):
+        with self._lock:
+            return self._peers[id]
+        
+    def __setitem__(self, id, ip):
+        with self._lock:
+            self._peers[id] = ip
+    
+    def __delitem__(self, id):
+        with self._lock:
+            del self._peers[id]
+
+    def __str__(self):
+        with self._lock:
+            return str(self._peers)
+    
+    def copy(self):
+        """Returns a copy of known of peers."""
+        with self._lock:
+            return self._peers.copy()
+
+known_peers = Peers() # For discovered peers/nodes
+node_id = uuid.uuid1() # Generate a new unique node identifier
 logger = get_logger('network', logging.DEBUG)
 
 class Connection:
