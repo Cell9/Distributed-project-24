@@ -87,6 +87,9 @@ players: dict[
 clients: list[
     tuple[Connection, int]
 ] = []  # List to keep track of connected clients (client_socket, player_id)
+gatherables: dict[
+    int, tuple # Stores information about gatherable objects
+] = {}
 
 
 # Send a message to all connected clients
@@ -156,7 +159,7 @@ def handle_client(client_socket):
 
 # Server's game loop for handling movements every second
 def update_positions():
-    gatherables = 0
+    gatherable_counter = 0
     while True:
         increment = 10
         time.sleep(1/5)  # Move players every 1 second
@@ -184,17 +187,23 @@ def update_positions():
             players[player_id]["position"] = (x, y)
 
         # spawn gatherable if needed (only 1 gatherable supported at the moment)
-        if gatherables <= 0:
+        if len(gatherables) < GATHERABLE_LIMIT:
             spawn_x, spawn_y = spawn_gatherable(increment)
-            gatherables = gatherables + 1
             print(f"Gatherable spawned at: {spawn_x, spawn_y}")
+            #print(len(gatherables))
+            gatherable_counter = gatherable_counter + 1
+            gatherable_id = str(gatherable_counter + 1)
+            gatherables[gatherable_id] = (spawn_x, spawn_y)
         
-        # check if any player is colliding with the gatherable
-        if gatherable_kill_check(spawn_x, spawn_y):
-            gatherables = gatherables - 1
+        gatherable_kill_check(spawn_x, spawn_y)
+        #print(len(gatherables))
         
         # Broadcast updated positions to all clients
         broadcast(json.dumps({"players": players}))
+
+        # Broadcast gatherable location to all clients
+        #print(gatherables)
+        broadcast(json.dumps({"gatherables": gatherables}))
 
 # Spawns gatherable objective
 def spawn_gatherable(increment):
@@ -210,11 +219,15 @@ def spawn_gatherable(increment):
 # gatherable collision check for all players
 def gatherable_kill_check(gatherable_x, gatherable_y):
     for player_id, player_data in players.items():
-        x, y = player_data["position"]
-        if check_collision(x,y,gatherable_x, gatherable_y):
-            kill_gatherable(player_id)
-            #print(player_id)
-            return True
+        for key in gatherables:
+            gatherable_x = gatherables[key][0]
+            gatherable_y = gatherables[key][1]
+            #print(gatherable_x, gatherable_y)
+            x, y = player_data["position"]
+            if check_collision(x,y,gatherable_x, gatherable_y):
+                kill_gatherable(player_id, key)
+                #print(player_id)
+                return True
     else:
         return False
 
@@ -226,8 +239,9 @@ def check_collision(player_x, player_y, object_x, object_y):
         return False
 
 # despawn gatherable, gives points, check if player has enough to win
-def kill_gatherable(player_id):
+def kill_gatherable(player_id, key):
     players[player_id]['points'] += 1
+    del gatherables[key]
     print(f"I am slain by player {str(player_id)}, summon another gatherable!")
     if players[player_id]['points'] >= POINT_LIMIT:
         round_reset(player_id)
@@ -301,4 +315,5 @@ if __name__ == "__main__":
     # Coordinate destrictions (client's pygame draws 600x400)
     X_MIN, X_MAX, Y_MIN, Y_MAX = 0, 580, 0, 380
     POINT_LIMIT = 5
+    GATHERABLE_LIMIT = 3
     start_server()

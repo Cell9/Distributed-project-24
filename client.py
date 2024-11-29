@@ -27,8 +27,16 @@ def display_positions():
             color = OTHER_PLAYER_COLOR  # Other players' color
         pygame.draw.rect(screen, color, (position[0], position[1], 20, 20))
 
-        #draw target, in progress
-        #draw_target(300,200)
+    # Draw gatherables to the screen (currently only one is used)
+    try:
+        for item in gatherable_positions:
+            #print(gatherable_positions)
+            #print(item)
+            gatherable_position = gatherable_positions[item]
+            draw_target(gatherable_position[0],gatherable_position[1])
+    except:
+        # no gatherable data received yet
+        pass
 
     pygame.display.flip()  # Update the display
 
@@ -48,7 +56,7 @@ def poll_and_act_update(in_queue: Queue[str]):
 
     print("got update", update)
     # Ensure these are treated as global variables
-    global positions, player_id
+    global positions, player_id, gatherable_positions
 
     # Set player ID when first received from server
     if "player_id" in update and player_id is None:
@@ -57,6 +65,11 @@ def poll_and_act_update(in_queue: Queue[str]):
     # Update player positions when received
     if "players" in update:
         positions = update["players"]
+
+    # Update gatherable position when received
+    if "gatherables" in update:
+        gatherable_positions = update["gatherables"]
+        
 
     # Update the display
     display_positions()
