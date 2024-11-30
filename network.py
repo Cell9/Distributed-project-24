@@ -7,7 +7,7 @@ import sys
 import uuid
 
 class Peers:
-    """A wrapper class for accessing known peers in a threadsafe way."""
+    """A class for accessing known peers in a threadsafe way."""
 
     def __init__(self):
         self._peers = dict()
@@ -19,11 +19,11 @@ class Peers:
     
     def __getitem__(self, id):
         with self._lock:
-            return self._peers[id]
+            return self._peers[id].copy()
         
     def __setitem__(self, id, ip):
         with self._lock:
-            self._peers[id] = ip
+            self._peers[id] = ip, time.time()
     
     def __delitem__(self, id):
         with self._lock:
@@ -33,6 +33,20 @@ class Peers:
         with self._lock:
             return str(self._peers)
     
+    def remove_stale_nodes(self, timeout = 30):
+        """Removes stale nodes that haven't been updated in over timeout seconds. Returns a list of removed node ids."""
+        removed = []
+
+        with self._lock:
+            current_time = time.time()
+            for id, (ip, timestamp) in self._peers.items():
+                if current_time - timestamp > timeout:
+                    removed.append(id)
+            for id in removed:
+                del self._peers[id]
+        
+        return removed
+
     def copy(self):
         """Returns a copy of known of peers."""
         with self._lock:
@@ -150,9 +164,11 @@ def listen_for_broadcasts():
             sender_ip, sender_id_str, game_id = message.split(',')
             sender_id = uuid.UUID(sender_id_str)
             
-            if sender_id not in known_peers and game_id == 'asdf':
-                logger.info(f"Received broadcast from: IP={sender_ip}, ID={sender_id_str}")
-                known_peers[sender_id] = sender_ip
+            if game_id == 'asdf':
+                if sender_id not in known_peers:
+                    # This id was not found in known_peers
+                    logger.info(f"Received broadcast from: IP={sender_ip}, ID={sender_id_str}")
+                known_peers[sender_id] = sender_ip # This updates the timestamp for sender_id
                 
             else:
                 pass
