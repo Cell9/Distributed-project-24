@@ -6,7 +6,7 @@ from typing import Literal
 import pygame  # Library for creating graphical interface
 import time
 from logger import get_logger, logging
-from network import broadcast_ip, listen_for_broadcasts, Connection
+from network import start_broadcast_thread, start_broadcast_listening_thread, start_peer_listening_thread, Connection
 
 
 # Get the client logger, you can specify one even for a function as well
@@ -108,13 +108,9 @@ def thread_handler(sock: socket.socket, in_queue: Queue[str], out_queue: Queue[s
 
 # Main client function with pygame loop
 def start_client():
-    
-    broadcast_thread = Thread(target=broadcast_ip, daemon=True)
-    listen_thread = Thread(target=listen_for_broadcasts, daemon=True)
-
-    print("Starting both broadcasting and listening...")
-    broadcast_thread.start()
-    listen_thread.start()
+    start_broadcast_thread()
+    start_broadcast_listening_thread()
+    start_peer_listening_thread()
     
     client_socket = socket.socket()
     client_socket.connect((HOST, PORT))

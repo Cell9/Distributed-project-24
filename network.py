@@ -13,6 +13,10 @@ class Peers:
         self._peers = dict()
         self._lock = RLock()
     
+    def _create_entry(self, ip, conn):
+        """Creates a known peer dict entry, a dict containing ip, conn, and a timestamp."""
+        return {'ip': ip, 'ts': time.time(), 'conn': conn}
+
     def __contains__(self, id):
         with self._lock:
             return id in self._peers
@@ -21,9 +25,9 @@ class Peers:
         with self._lock:
             return self._peers[id].copy()
         
-    def __setitem__(self, id, ip):
+    def __setitem__(self, id, entry):
         with self._lock:
-            self._peers[id] = ip, time.time()
+            self._peers[id] = entry
     
     def __delitem__(self, id):
         with self._lock:
@@ -51,7 +55,21 @@ class Peers:
         """Returns a copy of known of peers."""
         with self._lock:
             return self._peers.copy()
+        
+    def update_timestamp(self, peer_id):
+        """Updates the timestamp on peer_id."""
+        with self._lock:
+            self._peers[peer_id]['ts'] = time.time()
 
+    def add(self, peer_id, peer_ip, peer_conn):
+        """Add a new peer or update timestamp/conn."""
+        with self._lock:
+            if peer_id in self._peers:
+                self.update_timestamp(peer_id)
+            else:
+                self._peers[peer_id] = self._create_entry(peer_ip, peer_conn)
+
+GAME_ID = "asdf"  # ID to send with the IP. TODO: come up with a better id.
 known_peers = Peers() # For discovered peers/nodes
 node_id = uuid.uuid1() # Generate a new unique node identifier
 logger = get_logger('network', logging.DEBUG)
@@ -123,6 +141,80 @@ class Connection:
                 raise e
 
 
+def handshake_new_peer(conn) -> uuid.UUID | None:
+    """Shake hands with new peer through Connection.
+    Returns peer UUID or None if handshake wasn't successful."""
+    conn.send_message(f"{GAME_ID},{node_id}")
+    msg = conn.receive_message()
+    msgs = msg.split(",")
+
+    if len(msgs) != 2 and msgs[0] != GAME_ID:
+        logger.warning(f"Nonconforming connection, received message {msg}")
+        return None
+
+    return uuid.UUID(msgs[1])
+
+def listen_for_peer_connections():
+    """Blocking listen for new peer connections from nodes with lower ID. 
+    One of two ways of creating a new peer entry in known peers."""
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1) # Don't create more ports
+    hostname = socket.gethostname()
+    local_ip = socket.gethostbyname(hostname)
+    sock.bind((local_ip, 43234))
+
+    # This handles connection attempts coming in from nodes with lower node_id
+    while True:
+        sock.listen()
+        peer_socket, peer_addr = sock.accept()
+        conn = Connection(peer_socket)
+        
+        peer_id = handshake_new_peer(conn)
+
+        if not peer_id:
+            peer_socket.close()
+            continue
+
+        if peer_id > node_id:
+            # The connecting node should be lower ID than this one
+            logger.warning(f"Connection refused due to node id")
+            peer_socket.close()
+            continue
+
+        peer_ip, _ = peer_addr
+        known_peers.add(peer_id, peer_ip, conn)
+        logger.info(f"New known peer added. ID:{peer_id}, IP:{peer_ip}")
+
+
+def connect_and_add_new_peer(peer_id, peer_ip):
+    """Tries to create a new Connection to a node with a higher node_id, and add it to the known peers entry. 
+    Function is blocking."""
+    if peer_id == node_id:
+        # This is the same node, just add it as a peer w/o a connection.
+        known_peers.add(node_id, peer_ip, None)
+        return
+    if peer_id < node_id:
+        # Connection is made through listening in this case
+        return
+    
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1) # Don't create more ports
+    hostname = socket.gethostname()
+    local_ip = socket.gethostbyname(hostname)
+    sock.bind((local_ip, 43234))
+    sock.connect((peer_ip, 43234))
+    conn = Connection(sock)
+    peer_id = handshake_new_peer(conn)
+
+    if peer_id:
+        known_peers.add(peer_id, peer_ip, conn)
+        logger.info(f"New known peer added. ID:{peer_id}, IP:{peer_ip}")
+    else:
+        sock.close()
+
+
 def broadcast_ip():
     try:
         # Create a UDP socket
@@ -134,13 +226,12 @@ def broadcast_ip():
         local_ip = socket.gethostbyname(hostname) # The 'fix' is to replace local_ip with the svm-11-2 or 11-3 ip addresses manually.
         broadcast_address = ('<broadcast>', 50000)  # Use port 50000 for broadcasting
 
-        game_id = "asdf"  # ID to send with the IP. TODO: come up with a better id.
         node_id_str = str(node_id)
 
-        logger.info(f"Broadcasting IP, Node_ID, Game_ID: {local_ip}, {node_id_str}, {game_id}")
+        logger.info(f"Broadcasting IP, Node_ID, Game_ID: {local_ip}, {node_id_str}, {GAME_ID}")
         while True:
             # Send the IP address and ID as a broadcast message
-            message = f"{local_ip},{node_id_str},{game_id}".encode('utf-8')
+            message = f"{local_ip},{node_id_str},{GAME_ID}".encode('utf-8')
             sock.sendto(message, broadcast_address)
             time.sleep(5)  # Broadcast every 5 seconds
 
@@ -164,11 +255,13 @@ def listen_for_broadcasts():
             sender_ip, sender_id_str, game_id = message.split(',')
             sender_id = uuid.UUID(sender_id_str)
             
-            if game_id == 'asdf':
+            if game_id == GAME_ID:
                 if sender_id not in known_peers:
                     # This id was not found in known_peers
                     logger.info(f"Received broadcast from: IP={sender_ip}, ID={sender_id_str}")
-                known_peers[sender_id] = sender_ip # This updates the timestamp for sender_id
+                    Thread(target=connect_and_add_new_peer, args=(sender_id, sender_ip), daemon=True).start()
+                else:
+                    known_peers.update_timestamp(sender_id)
                 
             else:
                 pass
@@ -181,17 +274,24 @@ def listen_for_broadcasts():
 
 def start_broadcast_thread() -> Thread:
     """Starts and returns the LAN broadcast thread used to send host discovery messages."""
+    logger.info("Starting broadcasting")
     broadcast_thread = Thread(target=broadcast_ip, daemon=True)
     broadcast_thread.start()
-    logger.info("Starting broadcasting")
     return broadcast_thread
 
 def start_broadcast_listening_thread() -> Thread:
     """Starts and returns the LAN broadcast listening thread."""
+    logger.info("Starting broadcast listening")
     listening_thread = Thread(target=listen_for_broadcasts, daemon=True)
     listening_thread.start()
-    logger.info("Starting broadcast listening")
     return listening_thread
+
+def start_peer_listening_thread() -> Thread:
+    """Starts listening for new incoming peer connections."""
+    logger.info("Starting peer connection listening")
+    peer_listening_thread = Thread(target=listen_for_peer_connections, daemon=True)
+    peer_listening_thread.start()
+    return peer_listening_thread
 
 if __name__ == "__main__":
     # Used only to test the abilities of this module
@@ -200,7 +300,8 @@ if __name__ == "__main__":
     if 'broadcast' in cmdline_args:
         # Only broadcast, for testing/debugging
         start_broadcast_thread()
-        start_broadcast_listening_thread().join()
+        start_broadcast_listening_thread()
+        start_peer_listening_thread().join()
     elif 'bully' in cmdline_args:
         # Test/debug bully algorithm
         pass
