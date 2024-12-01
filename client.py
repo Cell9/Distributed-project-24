@@ -46,6 +46,9 @@ def display_positions():
 def draw_target(x_pos, y_pos):
     pygame.draw.rect(screen, TARGET_COLOR, (x_pos, y_pos, 20, 20))
 
+def scoreboardinfo():
+    for pid, data in scoreboard.items():
+        print(f"Player {pid}, points: {data["points"]}, games won: {data["games_won"]}")
 
 def poll_and_act_update(in_queue: Queue[str]):
     if in_queue.empty():
@@ -59,7 +62,7 @@ def poll_and_act_update(in_queue: Queue[str]):
 
     print("got update", update)
     # Ensure these are treated as global variables
-    global positions, player_id, gatherable_positions
+    global positions, player_id, gatherable_positions, scoreboard
 
     # Set player ID when first received from server
     if "player_id" in update and player_id is None:
@@ -73,6 +76,10 @@ def poll_and_act_update(in_queue: Queue[str]):
     if "gatherables" in update:
         gatherable_positions = update["gatherables"]
         
+    # Update scoreboard when received and print info
+    if "scoreboard" in update:
+        scoreboard = update["scoreboard"]
+        scoreboardinfo()
 
     # Update the display
     display_positions()

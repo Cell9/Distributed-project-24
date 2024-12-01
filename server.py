@@ -13,6 +13,10 @@ class PosStatus(TypedDict):
     points: int
     games_won: int
 
+class ScoreStatus(TypedDict):
+    points: int
+    games_won: int
+
 players: dict[
     int, PosStatus
 ] = {}  # Stores each player's last direction and current position {player_id: {'last_direction': direction, 'position': (x, y)}}
@@ -22,7 +26,9 @@ clients: list[
 gatherables: dict[
     int, tuple # Stores information about gatherable objects
 ] = {}
-
+scoreboard: dict[
+    int, ScoreStatus
+] = {}  # Stores each player's points and rounds won
 
 # Send a message to all connected clients
 def broadcast(message: str, exclude_client=None):
@@ -51,6 +57,12 @@ def handle_client(client_socket):
         "games_won": 0
     }  # Initialize player position and last direction
     print(f"Player {player_id} connected.")
+
+    # Add player to scoreboard
+    scoreboard[player_id] = {
+        "points": 0,
+        "games_won": 0
+    }
 
     # Send player_id to the client
     connection.send_message(json.dumps({"player_id": player_id}))
@@ -96,6 +108,7 @@ def handle_client(client_socket):
 def update_positions():
     gatherable_change = False
     gatherable_counter = 0
+    score_change = False
     global new_player_joined
     while True:
         increment = 10
@@ -134,7 +147,8 @@ def update_positions():
                 gatherable_id = str(gatherable_counter + 1)
                 gatherables[gatherable_id] = (spawn_x, spawn_y)
         
-        gatherable_kill_check(spawn_x, spawn_y)
+        if gatherable_kill_check(spawn_x, spawn_y):
+            score_change = True
         #print(len(gatherables))
         
         # Broadcast updated positions to all clients
@@ -148,6 +162,15 @@ def update_positions():
             broadcast(json.dumps({"gatherables": gatherables}))
             gatherable_change = False
             new_player_joined = False
+        else:
+            pass
+
+        # Broadcast scoreboard when change happens
+        if score_change:
+            print("Sending scoreboard info to clients")
+            print(scoreboard)
+            broadcast(json.dumps({"scoreboard": scoreboard}))
+            score_change = False
         else:
             pass
 
@@ -187,6 +210,7 @@ def check_collision(player_x, player_y, object_x, object_y):
 # despawn gatherable, gives points, check if player has enough to win
 def kill_gatherable(player_id, key):
     players[player_id]['points'] += 1
+    scoreboard[player_id]['points'] += 1
     del gatherables[key]
     print(f"I am slain by player {str(player_id)}, summon another gatherable!")
     if players[player_id]['points'] >= POINT_LIMIT:
@@ -195,10 +219,14 @@ def kill_gatherable(player_id, key):
 # when a player has enough points it wins the round and points are reset
 def round_reset(player_id):
     players[player_id]['games_won'] += 1
+    scoreboard[player_id]['games_won'] += 1
     print(f"Player {str(player_id)} wins the round!")
+    # handle scores saved to player table
     for player_id, player_data in players.items():
         player_data["points"] = 0
-
+    # handle scoreboard
+    for player_id, player_data in scoreboard.items():
+        player_data["points"] = 0
 
 # return True if there is player cube in this location
 def player_pos_check(x_pos, y_pos):
