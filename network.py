@@ -140,6 +140,18 @@ class Connection:
                 logger.error(f"Frame contained malformed unicode: {self.buffer_in}")
                 raise e
 
+def get_local_ip():
+    address = ""
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.connect(('10.1.1.1',1)) # Does not need to be reachable
+        address = s.getsockname()[0]
+    except Exception:    
+        address ='127.0.0.1'
+    finally:
+        s.close()    
+        
+    return str(address)
 
 def handshake_new_peer(conn) -> uuid.UUID | None:
     """Shake hands with new peer through Connection.
@@ -160,8 +172,7 @@ def listen_for_peer_connections():
     sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1) # Don't create more ports
-    hostname = socket.gethostname()
-    local_ip = socket.gethostbyname(hostname)
+    local_ip = get_local_ip()
     sock.bind((local_ip, 43234))
 
     # This handles connection attempts coming in from nodes with lower node_id
@@ -201,8 +212,7 @@ def connect_and_add_new_peer(peer_id, peer_ip):
     sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1) # Don't create more ports
-    hostname = socket.gethostname()
-    local_ip = socket.gethostbyname(hostname)
+    local_ip = get_local_ip()
     sock.bind((local_ip, 43234))
     sock.connect((peer_ip, 43234))
     conn = Connection(sock)
@@ -222,8 +232,7 @@ def broadcast_ip():
         # Enable broadcast mode
         sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
         # Get the local IP address
-        hostname = socket.gethostname()           # On cs.helsinki VMs this gets svm-11 as the hostname instead of svm-11-2 or 11-3.
-        local_ip = socket.gethostbyname(hostname) # The 'fix' is to replace local_ip with the svm-11-2 or 11-3 ip addresses manually.
+        local_ip = get_local_ip()
         broadcast_address = ('<broadcast>', 50000)  # Use port 50000 for broadcasting
 
         node_id_str = str(node_id)
@@ -267,9 +276,20 @@ def listen_for_broadcasts():
                 pass
             
             logger.debug(f"Known peers: {known_peers}")
-                  
     except Exception as e:
         logger.error(f"Error in listening: {e}")
+
+
+def bully():
+    
+      
+    k = known_peers.copy()
+    x = list()
+    
+    for key in k.keys():
+        
+        y = dict(k.get(key))                
+        x.append((y.get('ip'),key))
 
 
 def start_broadcast_thread() -> Thread:
@@ -297,6 +317,8 @@ if __name__ == "__main__":
     # Used only to test the abilities of this module
     cmdline_args = set(sys.argv[1:])
 
+    # print(get_local_ip())
+        
     if 'broadcast' in cmdline_args:
         # Only broadcast, for testing/debugging
         start_broadcast_thread()

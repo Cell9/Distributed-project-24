@@ -48,7 +48,7 @@ def draw_target(x_pos, y_pos):
 
 def scoreboardinfo():
     for pid, data in scoreboard.items():
-        print(f"Player {pid}, points: {data["points"]}, games won: {data["games_won"]}")
+        print(f"Player {pid}, points: {data['points']}, games won: {data['games_won']}")
 
 def poll_and_act_update(in_queue: Queue[str]):
     if in_queue.empty():
