@@ -5,6 +5,8 @@ import time
 from logger import get_logger, logging
 import sys
 import uuid
+import json
+from queue import Queue
 
 class Peers:
     """A class for accessing known peers in a threadsafe way."""
@@ -23,7 +25,9 @@ class Peers:
     
     def __getitem__(self, id):
         with self._lock:
-            return self._peers[id].copy()
+            if id in self._peers:
+                return self._peers[id].copy()
+            raise KeyError(f"No peer found, {id}")
         
     def __setitem__(self, id, entry):
         with self._lock:
@@ -68,11 +72,22 @@ class Peers:
                 self.update_timestamp(peer_id)
             else:
                 self._peers[peer_id] = self._create_entry(peer_ip, peer_conn)
+    
+    def remove(self, peer_id: uuid.UUID) -> uuid.UUID | None:
+        """Tries to remove a peer from known peers, returns peer id or None if the peer wasn't found."""
+        with self._lock:
+            if peer_id in self._peers:
+                del self._peers[peer_id]
+                return peer_id
+            return None
+
 
 GAME_ID = "asdf"  # ID to send with the IP. TODO: come up with a better id.
 known_peers = Peers() # For discovered peers/nodes
 node_id = uuid.uuid1() # Generate a new unique node identifier
 logger = get_logger('network', logging.DEBUG)
+msg_in = Queue()
+msg_out = Queue()
 
 class Connection:
     "Wrapper for sockets to make sending full messages instead of streams easier"
@@ -166,6 +181,38 @@ def handshake_new_peer(conn) -> uuid.UUID | None:
 
     return uuid.UUID(msgs[1])
 
+
+def handle_peer_recv(peer_id: uuid.UUID, conn: Connection):
+    """Handle receiving messages from a given peer. The incoming messages should all be in JSON format."""
+    logger.debug(f"Starting to receive messages from peer {peer_id}")
+    try:
+        while True:
+            msg_json = conn.receive_message()
+            try:
+                msg = json.loads(msg_json)
+                msg_in.put((peer_id, msg)) # Sender, msg tuple in the incoming queue
+            except json.JSONDecodeError as e:
+                logger.error(f"Peer {peer_id} sent malformed JSON: {msg_json}")
+    except ConnectionResetError:
+        logger.info(f"Peer {peer_id} disconnected")
+        known_peers.remove(peer_id) # Only remove the entry in the recv handler
+
+
+def handle_peer_send():
+    """Handle all data sending to peers using the msg_out queue. The outgoing messages get converted into JSON."""
+    while True:
+        # Get peer_id and the raw message from outgoing queue.
+        peer_id, msg_raw = msg_out.get() # This blocks until there is an item in the queue
+        try:
+            conn = known_peers[peer_id]['conn'] # Get the connection to peer
+            msg_json = json.dumps(msg_raw)
+            conn.send_message(msg_json)
+        except KeyError as err:
+            logger.debug(err)
+        except BrokenPipeError:
+            logger.info(f"Lost connection to {peer_id}")
+
+
 def listen_for_peer_connections():
     """Blocking listen for new peer connections from nodes with lower ID. 
     One of two ways of creating a new peer entry in known peers."""
@@ -196,11 +243,14 @@ def listen_for_peer_connections():
         peer_ip, _ = peer_addr
         known_peers.add(peer_id, peer_ip, conn)
         logger.info(f"New known peer added. ID:{peer_id}, IP:{peer_ip}")
+        
+        # Start a new thread for receiving messages from the new peer
+        Thread(target=handle_peer_recv, args=(peer_id, conn), daemon=True).start()
 
 
 def connect_and_add_new_peer(peer_id, peer_ip):
     """Tries to create a new Connection to a node with a higher node_id, and add it to the known peers entry. 
-    Function is blocking."""
+    Function is blocking. This is the second way a new peer entry can be added to known peers. """
     if peer_id == node_id:
         # This is the same node, just add it as a peer w/o a connection.
         known_peers.add(node_id, peer_ip, None)
@@ -221,6 +271,7 @@ def connect_and_add_new_peer(peer_id, peer_ip):
     if peer_id:
         known_peers.add(peer_id, peer_ip, conn)
         logger.info(f"New known peer added. ID:{peer_id}, IP:{peer_ip}")
+        Thread(target=handle_peer_recv, args=(peer_id, conn), daemon=True).start()
     else:
         sock.close()
 
@@ -280,6 +331,14 @@ def listen_for_broadcasts():
         logger.error(f"Error in listening: {e}")
 
 
+def send_to_all(data, exclude_peer=None):
+    """Send a data to all peers, except exlude_peer. Data is turned into JSON later."""
+    peers = known_peers.copy() # We'll deadlock if this isn't done
+    for peer_id in peers.keys():
+        if peer_id != exclude_peer and peer_id != node_id:
+            msg_out.put((peer_id, data))
+
+
 def bully():
     
       
@@ -313,6 +372,13 @@ def start_peer_listening_thread() -> Thread:
     peer_listening_thread.start()
     return peer_listening_thread
 
+def start_peer_send_thread() -> Thread:
+    """Starts the peer sending thread used to send outoing messages."""
+    logger.info("Starting outgoing peer messaging")
+    peer_sender_thread = Thread(target=handle_peer_send, daemon=True)
+    peer_sender_thread.start()
+    return peer_sender_thread
+
 if __name__ == "__main__":
     # Used only to test the abilities of this module
     cmdline_args = set(sys.argv[1:])
@@ -321,9 +387,18 @@ if __name__ == "__main__":
         
     if 'broadcast' in cmdline_args:
         # Only broadcast, for testing/debugging
-        start_broadcast_thread()
+        start_peer_listening_thread()
+        start_peer_send_thread()
         start_broadcast_listening_thread()
-        start_peer_listening_thread().join()
+        start_broadcast_thread()
+        while True:
+            time.sleep(3)
+            send_to_all(f"Hello from node {node_id}")
+            try:
+                peer_id, msg = msg_in.get(block=False)
+                logger.debug(f"Message received from {peer_id}: {msg}")
+            except Exception:
+                pass
     elif 'bully' in cmdline_args:
         # Test/debug bully algorithm
         pass
