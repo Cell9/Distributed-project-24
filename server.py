@@ -4,7 +4,15 @@ import json
 import time
 import random
 from typing import TypedDict
-from network import Connection
+from network import Connection, get_local_ip
+
+# Intialize global variables
+global new_player_joined
+X_MIN, X_MAX, Y_MIN, Y_MAX = 0, 580, 0, 380
+POINT_LIMIT = 5
+GATHERABLE_LIMIT = 3
+new_player_joined = False
+HOST = get_local_ip()
 
 # Game state and connected clients
 class PosStatus(TypedDict):
@@ -263,11 +271,11 @@ def border_check(coord, type, direction, increment):
             return False
 
 # Main server function
-def start_server():
+def start_server(HOST):
     # Server configurations
-    HOST = input("server IP to bind to:")
+    
     PORT = 12345
-
+    
     server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     server_socket.bind((HOST, PORT))
     server_socket.listen()
@@ -287,9 +295,9 @@ def start_server():
 
 if __name__ == "__main__":
     # Coordinate destrictions (client's pygame draws 600x400)
-    X_MIN, X_MAX, Y_MIN, Y_MAX = 0, 580, 0, 380
-    POINT_LIMIT = 5
-    GATHERABLE_LIMIT = 3
-    global new_player_joined
-    new_player_joined = False
-    start_server()
+    # X_MIN, X_MAX, Y_MIN, Y_MAX = 0, 580, 0, 380
+    # POINT_LIMIT = 5
+    # GATHERABLE_LIMIT = 3
+    # new_player_joined
+    # new_player_joined = False
+    start_server(HOST)

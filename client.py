@@ -6,8 +6,8 @@ from typing import Literal
 import pygame  # Library for creating graphical interface
 import time
 from logger import get_logger, logging
-from network import start_broadcast_thread, start_broadcast_listening_thread, start_peer_listening_thread, Connection
-
+from network import start_broadcast_thread, start_broadcast_listening_thread, start_peer_listening_thread, start_peer_send_thread, bully, get_local_ip, Connection
+from server import start_server
 
 # Get the client logger, you can specify one even for a function as well
 logger = get_logger('client', level = logging.DEBUG)
@@ -118,9 +118,26 @@ def start_client():
     start_broadcast_thread()
     start_broadcast_listening_thread()
     start_peer_listening_thread()
+    start_peer_send_thread()
+    
+    print("Starting leader selection.")
+    
+    isCoordinator, server_ip = bully()
+    
+    print("Leader selection complete.")
+    
+    print(isCoordinator)
+    print(server_ip)
+    
+    # If we are the Coordinator, we start the server with our local IP-address in a daemon thread.
+    if isCoordinator:
+        local_ip = get_local_ip()
+        server_thread = Thread(target=start_server,args=(local_ip,), daemon=True)
+        server_thread.start()
+
     
     client_socket = socket.socket()
-    client_socket.connect((HOST, PORT))
+    client_socket.connect((server_ip, PORT))
 
     # we use a connection thread to avoid having to deal
     # with the complexity of nonblocking sockets
@@ -174,7 +191,7 @@ if __name__ == "__main__":
     # Start the client
 
     # Server connection configuration
-    HOST = input("server ip to connect to:")
+    # HOST = input("server ip to connect to:")
     # HOST = 'server ip here'
     PORT = 12345
 
