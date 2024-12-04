@@ -6,11 +6,20 @@ from typing import Literal
 import pygame  # Library for creating graphical interface
 import time
 from logger import get_logger, logging
-from network import start_broadcast_thread, start_broadcast_listening_thread, start_peer_listening_thread, start_peer_send_thread, bully, get_local_ip, Connection
+from network import (
+    start_broadcast_thread,
+    start_broadcast_listening_thread,
+    start_peer_listening_thread,
+    start_peer_send_thread,
+    bully,
+    get_local_ip,
+    Connection,
+)
 from server import start_server
 
 # Get the client logger, you can specify one even for a function as well
-logger = get_logger('client', level = logging.DEBUG)
+logger = get_logger("client", level=logging.DEBUG)
+
 
 # Display the game positions
 def display_positions():
@@ -33,22 +42,25 @@ def display_positions():
     # Draw gatherables to the screen (currently only one is used)
     try:
         for item in gatherable_positions:
-            #print(gatherable_positions)
-            #print(item)
+            # print(gatherable_positions)
+            # print(item)
             gatherable_position = gatherable_positions[item]
-            draw_target(gatherable_position[0],gatherable_position[1])
+            draw_target(gatherable_position[0], gatherable_position[1])
     except:
         # no gatherable data received yet
         pass
 
     pygame.display.flip()  # Update the display
 
+
 def draw_target(x_pos, y_pos):
     pygame.draw.rect(screen, TARGET_COLOR, (x_pos, y_pos, 20, 20))
+
 
 def scoreboardinfo():
     for pid, data in scoreboard.items():
         print(f"Player {pid}, points: {data['points']}, games won: {data['games_won']}")
+
 
 def poll_and_act_update(in_queue: Queue[str]):
     if in_queue.empty():
@@ -60,7 +72,7 @@ def poll_and_act_update(in_queue: Queue[str]):
         print(f"received malformed data: {data}")
         raise e
 
-    print("got update", update)
+    # print("got update", update)
     # Ensure these are treated as global variables
     global positions, player_id, gatherable_positions, scoreboard
 
@@ -75,7 +87,7 @@ def poll_and_act_update(in_queue: Queue[str]):
     # Update gatherable position when received
     if "gatherables" in update:
         gatherable_positions = update["gatherables"]
-        
+
     # Update scoreboard when received and print info
     if "scoreboard" in update:
         scoreboard = update["scoreboard"]
@@ -96,11 +108,11 @@ def send_move(out_queue: Queue[str], direction: Literal["up", "down", "left", "r
         try:
             message = json.dumps(move_command)
             out_queue.put(message)
-            
-        except (json.JSONDecodeError) as e:
+
+        except json.JSONDecodeError as e:
             print("Disconnected from the server.")
             raise e
-        
+
 
 def thread_handler(sock: socket.socket, in_queue: Queue[str], out_queue: Queue[str]):
     # TODO: handle crashing. This does not propagate errors to the main thread
@@ -119,23 +131,22 @@ def start_client():
     start_broadcast_listening_thread()
     start_peer_listening_thread()
     start_peer_send_thread()
-    
+
     print("Starting leader selection.")
-    
+
     isCoordinator, server_ip = bully()
-    
+
     print("Leader selection complete.")
-    
+
     print(isCoordinator)
     print(server_ip)
-    
+
     # If we are the Coordinator, we start the server with our local IP-address in a daemon thread.
     if isCoordinator:
         local_ip = get_local_ip()
-        server_thread = Thread(target=start_server,args=(local_ip,), daemon=True)
+        server_thread = Thread(target=start_server, args=(local_ip,), daemon=True)
         server_thread.start()
 
-    
     client_socket = socket.socket()
     client_socket.connect((server_ip, PORT))
 
@@ -143,9 +154,11 @@ def start_client():
     # with the complexity of nonblocking sockets
     in_queue = Queue()
     out_queue = Queue()
-    conn_thread = Thread(target=thread_handler, args=(client_socket, in_queue, out_queue))
+    conn_thread = Thread(
+        target=thread_handler, args=(client_socket, in_queue, out_queue)
+    )
     conn_thread.start()
-    
+
     # Main game loop
     global player_id
     running = True
@@ -162,8 +175,8 @@ def start_client():
             time.sleep(0.1)
             continue
 
-        # Handle arrow key input for movement 
-        # Ignores input if previous_key is same as current input       
+        # Handle arrow key input for movement
+        # Ignores input if previous_key is same as current input
         keys = pygame.key.get_pressed()
         if keys[pygame.K_UP] and previous_key != keys[pygame.K_UP]:
             print("up")
@@ -180,9 +193,9 @@ def start_client():
             previous_key = [pygame.K_RIGHT]
         else:
             pass
-        
-        # Now game does not call the function send_move() if previous_key is same as current input       
-        
+
+        # Now game does not call the function send_move() if previous_key is same as current input
+
     # Clean up
     pygame.quit()
 
@@ -211,5 +224,5 @@ if __name__ == "__main__":
     # Colors for players
     PLAYER_COLOR = (0, 128, 255)  # Blue
     OTHER_PLAYER_COLOR = (128, 128, 128)  # Gray
-    TARGET_COLOR = (255, 0, 0) # Red
+    TARGET_COLOR = (255, 0, 0)  # Red
     start_client()
