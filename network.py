@@ -85,11 +85,15 @@ class Peers:
 
 
 GAME_ID = "asdf"  # ID to send with the IP. TODO: come up with a better id.
+BULLY_MSG_TYPE = "b"
+GAME_MSG_TYPE = "g"
+VALID_MSG_TYPES = {BULLY_MSG_TYPE, GAME_MSG_TYPE}
 known_peers = Peers()  # For discovered peers/nodes
 node_id = uuid.uuid1()  # Generate a new unique node identifier
 logger = get_logger("network", logging.DEBUG)
-msg_in = Queue()
-msg_out = Queue()
+bully_msg_in = Queue()
+game_msg_in = Queue()
+all_msg_out = Queue()
 
 
 class Connection:
@@ -188,18 +192,36 @@ def handshake_new_peer(conn) -> uuid.UUID | None:
 
     return uuid.UUID(msgs[1])
 
+def get_msg_type(msg_raw: str):
+    """Returns the message type (bully, game) and message from given raw message."""
+    msg_type = None
+
+    if len(msg_raw) > 1:
+        msg_type = msg_raw[0]
+        msg = msg_raw[1:]
+
+    if not msg_type or msg_type not in VALID_MSG_TYPES:
+        raise AttributeError("Invalid message type")
+    
+    return msg_type, msg
 
 def handle_peer_recv(peer_id: uuid.UUID, conn: Connection):
     """Handle receiving messages from a given peer. The incoming messages should all be in JSON format."""
     logger.debug(f"Starting to receive messages from peer {peer_id}")
     try:
         while True:
-            msg_json = conn.receive_message()
+            msg_raw = conn.receive_message()
             try:
-                msg = json.loads(msg_json)
-                msg_in.put((peer_id, msg))  # Sender, msg tuple in the incoming queue
+                msg_type, msg_raw = get_msg_type(msg_raw)
+                msg = json.loads(msg_raw)
+                if msg_type == BULLY_MSG_TYPE:
+                    bully_msg_in.put((peer_id, msg))
+                else:
+                    game_msg_in.put((peer_id, msg))
             except json.JSONDecodeError:
-                logger.error(f"Peer {peer_id} sent malformed JSON: {msg_json}")
+                logger.error(f"Peer {peer_id} sent malformed JSON: {msg_raw}")
+            except AttributeError as err:
+                logger.error(f"Peer {peer_id} sent a malformed message: {err}")
     except ConnectionResetError:
         logger.info(f"Peer {peer_id} disconnected")
         known_peers.remove(peer_id)  # Only remove the entry in the recv handler
@@ -208,14 +230,12 @@ def handle_peer_recv(peer_id: uuid.UUID, conn: Connection):
 def handle_peer_send():
     """Handle all data sending to peers using the msg_out queue. The outgoing messages get converted into JSON."""
     while True:
-        # Get peer_id and the raw message from outgoing queue.
-        peer_id, msg_raw = (
-            msg_out.get()
-        )  # This blocks until there is an item in the queue
+        # Get peer_id, msg type and the raw message from outgoing queue.
+        peer_id, msg_type, msg_raw = all_msg_out.get()
         try:
             conn = known_peers[peer_id]["conn"]  # Get the connection to peer
             msg_json = json.dumps(msg_raw)
-            conn.send_message(msg_json)
+            conn.send_message(msg_type + msg_json)
         except KeyError as err:
             logger.debug(err)
         except BrokenPipeError:
@@ -354,12 +374,12 @@ def listen_for_broadcasts():
         logger.error(f"Error in listening: {e}")
 
 
-def send_to_all(data, exclude_peer=None):
+def send_to_all(msg_type, data, exclude_peer=None):
     """Send a data to all peers, except exlude_peer. Data is turned into JSON later."""
-    peers = known_peers.copy()  # We'll deadlock if this isn't done
+    peers = known_peers.copy()
     for peer_id in peers.keys():
         if peer_id != exclude_peer and peer_id != node_id:
-            msg_out.put((peer_id, data))
+            all_msg_out.put((peer_id, msg_type, data))
 
 
 def bully():
@@ -386,8 +406,8 @@ def bully():
     for i in uuid_list:
         try:
             if node_id.clock_seq_hi_variant < i.clock_seq_hi_variant:
-                x = i, "ELECTION"
-                msg_out.put(x)
+                x = i, BULLY_MSG_TYPE, "ELECTION"
+                all_msg_out.put(x)
                 # logger.debug(f"variables are node: {node_id.clock_seq_hi_variant} and i: {i.clock_seq_hi_variant}")
             else:
                 pass
@@ -397,15 +417,15 @@ def bully():
     # Election process. OK to elections. Wait in loop for COORDINATOR. Break loop upon COORDINATOR and use message UUID to select sender IP-Address.
     while isParticipant or waiting:
         try:
-            m = msg_in.get(timeout=3)
+            m = bully_msg_in.get(timeout=3)
             logger.debug(f"Current incoming message type: {m[1]}")
             if m[1] == "OK" or waiting:
                 waiting = True
                 isParticipant = False
                 time.sleep(5)
             if m[1] == "ELECTION" and isParticipant:
-                x = m[0], "OK"
-                msg_out.put(x)
+                x = m[0], BULLY_MSG_TYPE, "OK"
+                all_msg_out.put(x)
             if m[1] == "COORDINATOR":
                 server_ip = known_peers[m[0]]["ip"]
                 break
@@ -413,8 +433,8 @@ def bully():
         except Exception:
             if not waiting:
                 for i in uuid_list:
-                    x = i, "COORDINATOR"
-                    msg_out.put(x)
+                    x = i, BULLY_MSG_TYPE, "COORDINATOR"
+                    all_msg_out.put(x)
                 isParticipant = False
                 isCoordinator = True
                 server_ip = get_local_ip()
@@ -471,9 +491,9 @@ if __name__ == "__main__":
         start_broadcast_thread()
         while True:
             time.sleep(3)
-            send_to_all(f"Hello from node {node_id}")
+            send_to_all(GAME_MSG_TYPE, f"Hello from node {node_id}")
             try:
-                peer_id, msg = msg_in.get(block=False)
+                peer_id, msg = game_msg_in.get(block=False)
                 logger.debug(f"Message received from {peer_id}: {msg}")
             except Exception:
                 pass
