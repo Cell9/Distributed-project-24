@@ -16,6 +16,7 @@ class Peers:
     def __init__(self):
         self._peers = dict()
         self._lock = RLock()
+        self._leader_id = None
 
     def _create_entry(self, ip, conn):
         """Creates a known peer dict entry, a dict containing ip, conn, and a timestamp."""
@@ -82,12 +83,25 @@ class Peers:
                 del self._peers[peer_id]
                 return peer_id
             return None
+    
+    def set_leader(self, server_id):
+        """Sets the coordinator (server/host)."""
+        with self._lock:
+            self._leader_id = server_id
+
+    def get_leader(self) -> uuid.UUID:
+        """Returns the current coordinator's UUID or None."""
+        with self._lock:
+            return self._leader_id
 
 
 GAME_ID = "asdf"  # ID to send with the IP. TODO: come up with a better id.
 BULLY_MSG_TYPE = "b"
 GAME_MSG_TYPE = "g"
 VALID_MSG_TYPES = {BULLY_MSG_TYPE, GAME_MSG_TYPE}
+BULLY_ELECTION = "ELECT"
+BULLY_OK = "OK"
+BULLY_COORD = "COORD"
 known_peers = Peers()  # For discovered peers/nodes
 node_id = uuid.uuid1()  # Generate a new unique node identifier
 logger = get_logger("network", logging.DEBUG)
@@ -382,6 +396,103 @@ def send_to_all(msg_type, data, exclude_peer=None):
             all_msg_out.put((peer_id, msg_type, data))
 
 
+def send_bully_message(peer_id, msg):
+    """Sends a bully message to peer_id."""
+    logger.debug(f"Send Bully {msg} to {peer_id}")
+    all_msg_out.put((peer_id, BULLY_MSG_TYPE, msg))
+
+
+def get_bully_message(timeout=None):
+    """Gets a sent bully message and sender's peer_id in a tuple (id, msg). 
+    Can return (None, None) if there is no message in timeout seconds."""
+    try:
+        return bully_msg_in.get(timeout=timeout)
+    except Exception:
+        return None, None
+
+
+def send_election_messages(notified_nodes: set):
+    """Sends a bully election message to all higher id peers.
+    If there are none, sets self as coordinator."""
+    peers = known_peers.copy()
+    # Send ELECTION messages to higher id peers
+    for peer_id in peers.keys():
+        if peer_id > node_id:
+            if peer_id not in notified_nodes:
+                # Actually send the message only once to each node
+                notified_nodes.add(peer_id)
+                send_bully_message(peer_id, BULLY_ELECTION)
+
+
+def set_self_as_coordinator():
+    """Sends coordinator messages to all, and sets the coordinator as this node."""
+    if known_peers.get_leader() != node_id:
+        logger.info(f"Assuming leader status")
+    
+    peers = known_peers.copy()
+    for peer_id in peers.keys():
+        if peer_id != node_id:
+            send_bully_message(peer_id, BULLY_COORD)
+    known_peers.set_leader(node_id)
+
+
+def bully2():
+    """Listens to Bully messages to manage leader election."""
+    waiting_for_OK = False
+    waiting_for_COORD = False
+    # Set of all nodes that have already been sent an ELECTION message this election
+    notified_nodes = set()
+
+    # Sleep for a while to populate peer list
+    time.sleep(6)
+    # Start a new election by "sending" self an ELECTION msg
+    bully_msg_in.put((node_id, BULLY_ELECTION))
+
+    while True:
+        if waiting_for_OK:
+            sender_id, msg = get_bully_message(timeout=2)
+        elif waiting_for_COORD:
+            sender_id, msg = get_bully_message(timeout=4)
+        else:
+            sender_id, msg = get_bully_message()
+
+        if not sender_id:
+            # This was a timeout from waiting for a message
+            logger.debug(f"Bully message timeout. OK={waiting_for_OK}, COORD={waiting_for_COORD}")
+            if waiting_for_OK:                
+                # Assume that we are the coordinator
+                waiting_for_OK = False
+                notified_nodes.clear()
+                set_self_as_coordinator()
+            elif waiting_for_COORD:
+                # Something went wrong and we never got a COORDINATOR message
+                logger.info(f"Didn't receive leader confirmation, starting election again")
+                waiting_for_COORD = False
+                notified_nodes.clear()
+                send_election_messages(notified_nodes)
+            continue
+
+        if sender_id != node_id:
+            logger.debug(f"Bully {msg} from {sender_id}. OK={waiting_for_OK}, COORD={waiting_for_COORD}")
+        
+        if msg == BULLY_ELECTION:
+            if sender_id < node_id:
+                # Take over from the lower node
+                send_bully_message(sender_id, BULLY_OK)
+            send_election_messages(notified_nodes)
+            waiting_for_OK = True
+        elif msg == BULLY_OK:
+            # Bully only needs to wait for COORDINATOR now
+            waiting_for_OK = False
+            waiting_for_COORD = True
+        elif msg == BULLY_COORD:
+            # Start treating sender_id as the new host
+            waiting_for_OK = False
+            waiting_for_COORD = False
+            notified_nodes.clear()
+            logger.info(f"Setting {sender_id} as leader")
+            known_peers.set_leader(sender_id)
+
 def bully():
     """Waits for peer list to populate and executes Bully algorithm. Returns coordinator boolean and server IP string"""
     time.sleep(10)
@@ -477,6 +588,14 @@ def start_peer_send_thread() -> Thread:
     return peer_sender_thread
 
 
+def start_bully_thread() -> Thread:
+    """Starts the bully management thread."""
+    logger.info("Starting leader management")
+    bully_thread = Thread(target=bully2, daemon=True)
+    bully_thread.start()
+    return bully_thread
+
+
 if __name__ == "__main__":
     # Used only to test the abilities of this module
     cmdline_args = set(sys.argv[1:])
@@ -490,7 +609,7 @@ if __name__ == "__main__":
         start_broadcast_listening_thread()
         start_broadcast_thread()
         while True:
-            time.sleep(3)
+            time.sleep(5)
             send_to_all(GAME_MSG_TYPE, f"Hello from node {node_id}")
             try:
                 peer_id, msg = game_msg_in.get(block=False)
@@ -499,13 +618,9 @@ if __name__ == "__main__":
                 pass
     elif "bully" in cmdline_args:
         # Test/debug bully algorithm
+        logger.info(f"Network node id is {node_id}")
         start_peer_listening_thread()
         start_peer_send_thread()
         start_broadcast_listening_thread()
         start_broadcast_thread()
-
-        x, y = bully()
-
-        print(x)
-
-        print(y)
+        start_bully_thread().join()
