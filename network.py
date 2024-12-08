@@ -80,6 +80,9 @@ class Peers:
         """Tries to remove a peer from known peers, returns peer id or None if the peer wasn't found."""
         with self._lock:
             if peer_id in self._peers:
+                if self._leader_id == peer_id:
+                    # Remove from leader as well
+                    self.set_leader(None)
                 del self._peers[peer_id]
                 return peer_id
             return None
@@ -104,7 +107,6 @@ BULLY_ELECTION = "ELECT"
 BULLY_OK = "OK"
 BULLY_COORD = "COORD"
 SYNC_GAMESTATE = "SYNC"
-ADD_PLAYER = "ADD PLAYER"
 known_peers = Peers()  # For discovered peers/nodes
 node_id = uuid.uuid1()  # Generate a new unique node identifier
 logger = get_logger("network", logging.DEBUG)
@@ -279,8 +281,14 @@ def handle_peer_recv(peer_id: uuid.UUID, conn: Connection):
                 logger.error(f"Peer {peer_id} sent a malformed message: {err}")
     except ConnectionResetError:
         logger.info(f"Peer {peer_id} disconnected")
-        known_peers.remove(peer_id)  # Only remove the entry in the recv handler
+    except OSError:
+        pass
 
+    known_peers.remove(peer_id)
+    if known_peers.get_leader() == None:
+        # Start a new election
+        bully_msg_in.put((node_id, BULLY_ELECTION))
+        
 
 def handle_peer_send():
     """Handle all data sending to peers using the msg_out queue. The outgoing messages get converted into JSON."""
@@ -306,6 +314,8 @@ def handle_peer_send():
             logger.debug(err)
         except BrokenPipeError:
             logger.info(f"Lost connection to {peer_id}")
+            conn = known_peers[peer_id]["conn"]
+            conn.sock.close()
 
 
 def listen_for_peer_connections():

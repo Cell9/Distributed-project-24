@@ -16,8 +16,7 @@ from network import (
     maintenance_msg_in,
     SYNC_GAMESTATE
 )
-from queue import Queue
-from uuid import UUID
+import uuid
 from logger import get_logger, logging
 
 # Intialize global variables
@@ -190,6 +189,24 @@ def process_player_messages():
             players[peer_id]["last_direction"] = msg["move"]
 
 
+def handle_player_status():
+    """Add/remove players if they are/aren't in the known peers."""
+    # Add any new peers to players
+    peers = known_peers.copy()
+    for peer_id in peers:
+        peer_id = str(peer_id)
+        if peer_id not in players:
+            create_new_player(peer_id)
+
+    # Remove players that are no longer peers
+    players_copy = players.copy()
+    for player_id in players_copy:
+        pid = uuid.UUID(player_id)
+        if pid not in peers:
+            logger.debug(f"Client {player_id} removed from players.")
+            del players[player_id]
+            del scoreboard[player_id]
+
 # Server's game loop for handling movements every second
 def update_positions():
     gatherable_change = False
@@ -204,13 +221,7 @@ def update_positions():
             clear_server_messages()
             continue
 
-        # Add any new peers to players
-        peers = known_peers.copy()
-        for peer_id in peers:
-            peer_id = str(peer_id)
-            if peer_id not in players:
-                create_new_player(peer_id)
-
+        handle_player_status()
         sync_gamestate()
         process_player_messages()
 
@@ -236,17 +247,16 @@ def update_positions():
             # Update player position
             players[player_id]["position"] = (x, y)
 
-        # spawn gatherable if needed (only 1 gatherable supported at the moment)
-        if len(gatherables) < GATHERABLE_LIMIT:
-            while len(gatherables) < GATHERABLE_LIMIT:
-                gatherable_change = True
-                spawn_x, spawn_y = spawn_gatherable(increment)
-                print(f"Gatherable spawned at: {spawn_x, spawn_y}")
-                gatherable_counter = 0
-                if len(gatherables) > 0:
-                    gatherable_counter = int(max(gatherables.keys()))
-                gatherable_id = gatherable_counter + 1
-                gatherables[gatherable_id] = (spawn_x, spawn_y)
+        # spawn gatherable if needed
+        while len(gatherables) < GATHERABLE_LIMIT:
+            gatherable_change = True
+            spawn_x, spawn_y = spawn_gatherable(increment)
+            print(f"Gatherable spawned at: {spawn_x, spawn_y}")
+            gatherable_counter = 0
+            if len(gatherables) > 0:
+                gatherable_counter = max(gatherables.keys())
+            gatherable_id = int(gatherable_counter) + 1
+            gatherables[str(gatherable_id)] = (spawn_x, spawn_y)
 
         if gatherable_kill_check():
             score_change = True
@@ -262,14 +272,12 @@ def update_positions():
 
         # Broadcast gatherable location to all clients
         if gatherable_change or new_player_joined:
-            print("Sending gatherable object info to clients")
             gamestate_dict["gatherables"] = gatherables
             gatherable_change = False
             new_player_joined = False
 
         # Broadcast scoreboard when change happens
         if score_change:
-            print("Sending scoreboard info to clients")
             print(scoreboard)
             gamestate_dict["scoreboard"] = scoreboard
             score_change = False
@@ -383,26 +391,3 @@ def start_server_thread() -> Thread:
     server_thread = Thread(target=update_positions, daemon=True)
     server_thread.start()
     return server_thread
-
-
-# Main server function
-def start_server(HOST):
-    # Server configurations
-
-    PORT = 12345
-
-    server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    server_socket.bind((HOST, PORT))
-    server_socket.listen()
-    print(f"Server started on {HOST}:{PORT}")
-
-    # Start the game loop in a separate thread
-    threading.Thread(target=update_positions, daemon=True).start()
-
-    while True:
-        client_socket, addr = server_socket.accept()
-        print(f"Connection from {addr}")
-
-        # Start a new thread for each connected client
-        thread = threading.Thread(target=handle_client, args=(client_socket,))
-        thread.start()
