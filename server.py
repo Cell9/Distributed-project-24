@@ -1,7 +1,4 @@
-import socket
-import threading
 from threading import Thread
-import json
 import time
 import random
 from typing import TypedDict
@@ -54,82 +51,15 @@ gatherables: dict[
 scoreboard: dict[int, ScoreStatus] = {}  # Stores each player's points and rounds won
 
 
-# Send a message to all connected clients
-def broadcast(message: str, exclude_client=None):
-    for client, addr in clients:
-        if client != exclude_client:  # Exclude the client that sent the message
-            try:
-                client.send_message(message)
-            except BrokenPipeError:
-                print(f"Lost connection to {addr}. Removing from clients.")
-                clients.remove((client, addr))
-
-
-# Handle each client connection
-def handle_client(client_socket):
-    # set new player joined to True for sending other than positions data
-    global new_player_joined
-    new_player_joined = True
-    # Assign a new player ID to the client
-    player_id = len(players) + 1
-    connection = Connection(client_socket)
-    clients.append((connection, player_id))  # Add the client to the list
-    players[player_id] = {
-        "position": (0, 0),
-        "last_direction": None,
-        "points": 0,
-        "games_won": 0,
-    }  # Initialize player position and last direction
-    print(f"Player {player_id} connected.")
-
-    # Add player to scoreboard
-    scoreboard[player_id] = {"points": 0, "games_won": 0}
-
-    # Send player_id to the client
-    connection.send_message(json.dumps({"player_id": player_id}))
-
-    # Send the initial list of players to the client
-    broadcast(json.dumps({"players": players}), exclude_client=connection)
-
-    try:
-        while True:
-            data = connection.receive_message()
-
-            # Process movement command
-            try:
-                command = json.loads(data)
-            except json.JSONDecodeError as e:
-                print(f"Player {player_id} sent malformed JSON: {data} and {command}")
-                raise e
-            if "move" in command and "player_id" in command:
-                # Verify the command is for the current player
-                if command["player_id"] == player_id:
-                    # Update the last move direction
-                    players[player_id]["last_direction"] = command["move"]
-
-                    # Broadcast updated positions to all clients
-                    # print(players)  # Print the dict for test purposes
-                    broadcast(json.dumps({"players": players}))
-    except ConnectionResetError:
-        print(f"Player {player_id} disconnected.")
-
-    finally:
-        # Cleanup on client disconnect
-        del players[player_id]
-        clients.remove((connection, player_id))
-        client_socket.close()
-        print(f"Player {player_id} connection closed.")
-        # Broadcast updated player list to remaining clients
-        broadcast(json.dumps({"players": players}))
-
-
 def get_server_maintenance_message():
+    """Retrieves server maintenance message from queue"""
     try:
         return maintenance_msg_in.get(block=False)
     except Exception:
         return None
 
 def sync_gamestate():
+    """Sync gamestate after server change."""
     global players, scoreboard, gatherables, gamestate_clock
     maint_msg = get_server_maintenance_message()
 
@@ -137,7 +67,7 @@ def sync_gamestate():
         # The server needs to ask for gamestate clocks from the clients
         # and select the highest one as the new gamestate
         send_to_clients({"sync_gamestate": gamestate_clock})
-        time.sleep(5)
+        time.sleep(3)
 
         while True:
             peer_id, msg = poll_server_msg_queue()
@@ -270,21 +200,20 @@ def update_positions():
             "players": players,
         }
 
-        # Broadcast gatherable location to all clients
+        # Update gatherable location to all clients
         if gatherable_change or new_player_joined:
             gamestate_dict["gatherables"] = gatherables
             gatherable_change = False
             new_player_joined = False
 
-        # Broadcast scoreboard when change happens
+        # Update scoreboard when change happens
         if score_change:
             print(scoreboard)
             gamestate_dict["scoreboard"] = scoreboard
             score_change = False
 
-        # Broadcast updated positions to all clients
+        # Update positions to all clients
         send_to_clients(gamestate_dict)
-        #broadcast(json.dumps(gamestate_dict))
 
 
 # Spawns gatherable objective

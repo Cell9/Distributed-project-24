@@ -557,68 +557,6 @@ def bully2():
             logger.info(f"Setting {sender_id} as leader")
             known_peers.set_leader(sender_id)
 
-def bully():
-    """Waits for peer list to populate and executes Bully algorithm. Returns coordinator boolean and server IP string"""
-    time.sleep(10)
-
-    # Initialize variables
-    isParticipant = True
-    isCoordinator = False
-    waiting = False
-    server_ip = ""
-    k = known_peers.copy()
-    uuid_list = list()
-
-    # Generate a list of UUIDs from known_peers and discard your own.
-    for key in k.keys():
-        if node_id != key:
-            uuid_list.append((key))
-        else:
-            pass
-    print(f"MY UUID: {node_id}")
-    print(f"MY VARIABLE: {node_id.clock_seq_hi_variant}")
-
-    for i in uuid_list:
-        try:
-            if node_id.clock_seq_hi_variant < i.clock_seq_hi_variant:
-                x = i, BULLY_MSG_TYPE, "ELECTION"
-                all_msg_out.put(x)
-                # logger.debug(f"variables are node: {node_id.clock_seq_hi_variant} and i: {i.clock_seq_hi_variant}")
-            else:
-                pass
-        except Exception as e:
-            logger.error(f"Error in initial propagation: {e}")
-
-    # Election process. OK to elections. Wait in loop for COORDINATOR. Break loop upon COORDINATOR and use message UUID to select sender IP-Address.
-    while isParticipant or waiting:
-        try:
-            m = bully_msg_in.get(timeout=3)
-            logger.debug(f"Current incoming message type: {m[1]}")
-            if m[1] == "OK" or waiting:
-                waiting = True
-                isParticipant = False
-                time.sleep(5)
-            if m[1] == "ELECTION" and isParticipant:
-                x = m[0], BULLY_MSG_TYPE, "OK"
-                all_msg_out.put(x)
-            if m[1] == "COORDINATOR":
-                server_ip = known_peers[m[0]]["ip"]
-                break
-        # COORDINATOR is sent by the last non-waiting participant upon msg_in queue being empty for 3 seconds as it causes an Exception.
-        except Exception:
-            if not waiting:
-                for i in uuid_list:
-                    x = i, BULLY_MSG_TYPE, "COORDINATOR"
-                    all_msg_out.put(x)
-                isParticipant = False
-                isCoordinator = True
-                server_ip = get_local_ip()
-                break
-            else:
-                break
-    # Return coordinator status as boolean and the server_ip to be used for connecting to server.
-    return isCoordinator, server_ip
-
 
 def start_broadcast_thread() -> Thread:
     """Starts and returns the LAN broadcast thread used to send host discovery messages."""
@@ -660,31 +598,22 @@ def start_bully_thread() -> Thread:
     return bully_thread
 
 
+def start_network_threads() -> None:
+    """Starts all the network management threads."""
+    start_peer_listening_thread()
+    start_peer_send_thread()
+    start_broadcast_listening_thread()
+    start_broadcast_thread()
+    start_bully_thread()
+
+
 if __name__ == "__main__":
     # Used only to test the abilities of this module
-    cmdline_args = set(sys.argv[1:])
 
-    # print(get_local_ip())
-
-    if "broadcast" in cmdline_args:
-        # Only broadcast, for testing/debugging
-        start_peer_listening_thread()
-        start_peer_send_thread()
-        start_broadcast_listening_thread()
-        start_broadcast_thread()
-        while True:
-            time.sleep(5)
-            send_to_all(CLIENT_MSG_TYPE, f"Hello from node {node_id}")
-            try:
-                peer_id, msg = client_msg_in.get(block=False)
-                logger.debug(f"Message received from {peer_id}: {msg}")
-            except Exception:
-                pass
-    elif "bully" in cmdline_args:
-        # Test/debug bully algorithm
-        logger.info(f"Network node id is {node_id}")
-        start_peer_listening_thread()
-        start_peer_send_thread()
-        start_broadcast_listening_thread()
-        start_broadcast_thread()
-        start_bully_thread().join()
+    # Test/debug bully algorithm
+    logger.info(f"Network node id is {node_id}")
+    start_peer_listening_thread()
+    start_peer_send_thread()
+    start_broadcast_listening_thread()
+    start_broadcast_thread()
+    start_bully_thread().join()
