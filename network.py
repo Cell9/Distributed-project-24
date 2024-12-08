@@ -1,13 +1,12 @@
+from os import getenv, name as os_platform_name
 import socket
 import struct
 from threading import Thread, RLock
 import time
 from logger import get_logger, logging
-import sys
 import uuid
 import json
 from queue import Queue, Empty
-from os import getenv
 
 
 class Peers:
@@ -229,6 +228,8 @@ def poll_server_msg_queue(block=False):
 
 def get_local_ip():
     address = ""
+    if env_ip := getenv("GAME_IP"):
+        return env_ip
     try:
         s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         s.connect(("10.1.1.1", 1))  # Does not need to be reachable
@@ -337,9 +338,11 @@ def listen_for_peer_connections():
     One of two ways of creating a new peer entry in known peers."""
     sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-    sock.setsockopt(
-        socket.SOL_SOCKET, socket.SO_REUSEPORT, 1
-    )  # Don't create more ports
+    if os_platform_name != "nt":
+        # on Windows this is undefined and SO_REUSEADDR has the same functionality
+        sock.setsockopt(
+            socket.SOL_SOCKET, socket.SO_REUSEPORT, 1
+        )  # Don't create more ports
     local_ip = get_local_ip()
     sock.bind((local_ip, 43234))
 
@@ -382,9 +385,11 @@ def connect_and_add_new_peer(peer_id, peer_ip):
 
     sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-    sock.setsockopt(
-        socket.SOL_SOCKET, socket.SO_REUSEPORT, 1
-    )  # Don't create more ports
+    if os_platform_name != "nt":
+        # on Windows this is undefined and SO_REUSEADDR has the same functionality
+        sock.setsockopt(
+            socket.SOL_SOCKET, socket.SO_REUSEPORT, 1
+        )  # Don't create more ports
     local_ip = get_local_ip()
     sock.bind((local_ip, 43234))
     sock.connect((peer_ip, 43234))
@@ -406,7 +411,7 @@ def broadcast_ip():
         # Enable broadcast mode
         sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
         # Get the local IP address
-        local_ip = getenv("GAME_IP") or get_local_ip()
+        local_ip = get_local_ip()
         broadcast_address = ("<broadcast>", 50000)  # Use port 50000 for broadcasting
 
         node_id_str = str(node_id)
