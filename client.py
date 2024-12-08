@@ -1,7 +1,3 @@
-from queue import Queue
-import socket
-import json
-from threading import Thread
 from typing import Literal
 import pygame  # Library for creating graphical interface
 import time
@@ -11,11 +7,14 @@ from network import (
     start_broadcast_listening_thread,
     start_peer_listening_thread,
     start_peer_send_thread,
-    bully,
-    get_local_ip,
-    Connection,
+    start_bully_thread,
+    node_id,
+    client_send_to_server,
+    poll_client_msg_queue,
+    known_peers
 )
-from server import start_server
+from server import start_server_thread
+from uuid import UUID
 
 # Get the client logger, you can specify one even for a function as well
 logger = get_logger("client", level=logging.DEBUG)
@@ -25,15 +24,12 @@ logger = get_logger("client", level=logging.DEBUG)
 def display_positions():
     screen.fill((0, 0, 0))  # Clear screen with black background
 
-    print(str(positions.items()))  # Print dict for test purposes
+    # print(str(positions.items()))  # Print dict for test purposes
     # Draw each player as a rectangle
     for pid, data in positions.items():
-        print(
-            "pid: " + str(pid) + ", " + "player_id: " + str(player_id)
-        )  # Print some player data for test purposes
         # Check if this player is the local player
         position = data["position"]
-        if str(pid) == str(player_id):
+        if pid == str(node_id):
             color = PLAYER_COLOR  # Local player color
         else:
             color = OTHER_PLAYER_COLOR  # Other players' color
@@ -42,8 +38,6 @@ def display_positions():
     # Draw gatherables to the screen (currently only one is used)
     try:
         for item in gatherable_positions:
-            # print(gatherable_positions)
-            # print(item)
             gatherable_position = gatherable_positions[item]
             draw_target(gatherable_position[0], gatherable_position[1])
     except:
@@ -62,23 +56,28 @@ def scoreboardinfo():
         print(f"Player {pid}, points: {data['points']}, games won: {data['games_won']}")
 
 
-def poll_and_act_update(in_queue: Queue[str]):
-    if in_queue.empty():
+def poll_and_act_update(leader_id):
+    peer_id, update = poll_client_msg_queue()
+    if not update or peer_id != leader_id:
+        display_positions()
         return
-    data = in_queue.get()
-    try:
-        update = json.loads(data)
-    except json.JSONDecodeError as e:
-        print(f"received malformed data: {data}")
-        raise e
 
-    # print("got update", update)
     # Ensure these are treated as global variables
-    global positions, player_id, gatherable_positions, scoreboard
+    global positions, gatherable_positions, scoreboard, gamestate_clock
 
-    # Set player ID when first received from server
-    if "player_id" in update and player_id is None:
-        player_id = update["player_id"]
+    if "sync_gamestate" in update:
+        logger.debug(f"Received sync gamestate request from server")
+        if update["sync_gamestate"] < gamestate_clock:
+            logger.debug(f"Sent newer gamestate back to server")
+            client_send_to_server({
+                "sync_gamestate": gamestate_clock,
+                "players": positions,
+                "gatherables": gatherable_positions,
+                "scoreboard": scoreboard,
+            })
+
+    if "clock" in update:
+        gamestate_clock = update["clock"]
 
     # Update player positions when received
     if "players" in update:
@@ -98,103 +97,61 @@ def poll_and_act_update(in_queue: Queue[str]):
 
 
 # Send movement commands to the server via queue
-def send_move(out_queue: Queue[str], direction: Literal["up", "down", "left", "right"]):
-    print(
-        f"player id: {player_id}, direction: {direction}"
-    )  # Print some player data for test purposes
-    if player_id is not None:  # Ensure player_id is set
-        print("putting")
-        move_command = {"move": direction, "player_id": player_id}
-        try:
-            message = json.dumps(move_command)
-            out_queue.put(message)
-
-        except json.JSONDecodeError as e:
-            print("Disconnected from the server.")
-            raise e
+def send_move(direction: Literal["up", "down", "left", "right"]):
+    move_command = {"move": direction, "player_id": str(node_id)}
+    client_send_to_server(move_command)
 
 
-def thread_handler(sock: socket.socket, in_queue: Queue[str], out_queue: Queue[str]):
-    # TODO: handle crashing. This does not propagate errors to the main thread
-    conn = Connection(sock)
+def check_leader(current_leader: UUID, previous_key) -> UUID:
+    """Checks if the leader exists."""
     while True:
-        # TODO: should probably be more asynchronous. currently receiving and sending alternate
-        # as sockets aren't thread safe and it'd require more complex nonblocking logic to be more async
-        if not out_queue.empty():
-            conn.send_message(out_queue.get())
-        in_queue.put(conn.receive_message())
-
+        new_leader = known_peers.get_leader()
+        if new_leader is None:
+            time.sleep(0.1)
+            continue
+        return new_leader
 
 # Main client function with pygame loop
 def start_client():
-    start_broadcast_thread()
-    start_broadcast_listening_thread()
     start_peer_listening_thread()
     start_peer_send_thread()
-
-    print("Starting leader selection.")
-
-    isCoordinator, server_ip = bully()
-
-    print("Leader selection complete.")
-
-    print(isCoordinator)
-    print(server_ip)
-
-    # If we are the Coordinator, we start the server with our local IP-address in a daemon thread.
-    if isCoordinator:
-        local_ip = get_local_ip()
-        server_thread = Thread(target=start_server, args=(local_ip,), daemon=True)
-        server_thread.start()
-
-    client_socket = socket.socket()
-    client_socket.connect((server_ip, PORT))
-
-    # we use a connection thread to avoid having to deal
-    # with the complexity of nonblocking sockets
-    in_queue = Queue()
-    out_queue = Queue()
-    conn_thread = Thread(
-        target=thread_handler, args=(client_socket, in_queue, out_queue)
-    )
-    conn_thread.start()
+    start_broadcast_listening_thread()
+    start_broadcast_thread()
+    start_bully_thread()
+    start_server_thread()
 
     # Main game loop
-    global player_id
     running = True
     previous_key = None
+    current_leader = check_leader(None, previous_key)
+    pygame_clock = pygame.time.Clock()
+
     while running:
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
                 running = False
 
-        poll_and_act_update(in_queue)
-
-        # Wait for the server to send the player_id
-        if player_id is None:
-            time.sleep(0.1)
-            continue
+        current_leader = check_leader(current_leader, previous_key)
+        poll_and_act_update(current_leader)
 
         # Handle arrow key input for movement
         # Ignores input if previous_key is same as current input
         keys = pygame.key.get_pressed()
         if keys[pygame.K_UP] and previous_key != keys[pygame.K_UP]:
-            print("up")
-            send_move(out_queue, "up")
+            send_move("up")
             previous_key = keys[pygame.K_UP]
         elif keys[pygame.K_DOWN] and previous_key != [pygame.K_DOWN]:
-            send_move(out_queue, "down")
+            send_move("down")
             previous_key = [pygame.K_DOWN]
         elif keys[pygame.K_LEFT] and previous_key != [pygame.K_LEFT]:
-            send_move(out_queue, "left")
+            send_move("left")
             previous_key = [pygame.K_LEFT]
         elif keys[pygame.K_RIGHT] and previous_key != [pygame.K_RIGHT]:
-            send_move(out_queue, "right")
+            send_move("right")
             previous_key = [pygame.K_RIGHT]
-        else:
-            pass
-
-        # Now game does not call the function send_move() if previous_key is same as current input
+        
+        # Cap framerate to 60 fps
+        pygame_clock.tick(60)
 
     # Clean up
     pygame.quit()
@@ -211,9 +168,11 @@ if __name__ == "__main__":
     # Game state
     Position = tuple[int, int]
     positions: dict[
-        int, Position
+        str, Position
     ] = {}  # Dictionary to keep track of player positions locally
-    player_id: None | int = None  # Unique identifier for the client
+    # player_id: None | int = None  # Unique identifier for the client
+    gamestate_clock: int = 0
+    scoreboard = {}
 
     # Initialize pygame
     pygame.init()

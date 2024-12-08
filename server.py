@@ -1,10 +1,24 @@
 import socket
 import threading
+from threading import Thread
 import json
 import time
 import random
 from typing import TypedDict
-from network import Connection, get_local_ip
+from network import (
+    Connection, 
+    get_local_ip, 
+    known_peers, 
+    node_id, 
+    send_to_clients, 
+    clear_server_messages,
+    poll_server_msg_queue,
+    maintenance_msg_in,
+    SYNC_GAMESTATE
+)
+from queue import Queue
+from uuid import UUID
+from logger import get_logger, logging
 
 # Intialize global variables
 global new_player_joined
@@ -13,7 +27,8 @@ POINT_LIMIT = 5
 GATHERABLE_LIMIT = 3
 new_player_joined = False
 HOST = get_local_ip()
-
+gamestate_clock = 0
+logger = get_logger("server", logging.DEBUG)
 
 # Game state and connected clients
 class PosStatus(TypedDict):
@@ -29,7 +44,7 @@ class ScoreStatus(TypedDict):
 
 
 players: dict[
-    int, PosStatus
+    str, PosStatus
 ] = {}  # Stores each player's last direction and current position {player_id: {'last_direction': direction, 'position': (x, y)}}
 clients: list[
     tuple[Connection, int]
@@ -109,15 +124,95 @@ def handle_client(client_socket):
         broadcast(json.dumps({"players": players}))
 
 
+def get_server_maintenance_message():
+    try:
+        return maintenance_msg_in.get(block=False)
+    except Exception:
+        return None
+
+def sync_gamestate():
+    global players, scoreboard, gatherables, gamestate_clock
+    maint_msg = get_server_maintenance_message()
+
+    if maint_msg == SYNC_GAMESTATE:
+        # The server needs to ask for gamestate clocks from the clients
+        # and select the highest one as the new gamestate
+        send_to_clients({"sync_gamestate": gamestate_clock})
+        time.sleep(5)
+
+        while True:
+            peer_id, msg = poll_server_msg_queue()
+            if peer_id == None:
+                break
+            if "sync_gamestate" not in msg:
+                continue
+            if gamestate_clock < msg["sync_gamestate"]:
+                # Update the server gamestate to the received one
+                gamestate_clock = msg["sync_gamestate"]
+                players = msg["players"]
+                scoreboard = msg["scoreboard"]
+                gatherables = msg["gatherables"]
+
+        # Update clients to newest gamestate
+        send_to_clients({
+            "clock": gamestate_clock,
+            "players": players,
+            "gatherables": gatherables,
+            "scoreboard": scoreboard,
+        })
+
+        
+    
+def create_new_player(peer_id: str):
+    """Creates a new player to the players dict"""
+    global new_player_joined
+    new_player_joined = True
+
+    players[peer_id] = {
+        "position": (0, 0),
+        "last_direction": None,
+        "points": 0,
+        "games_won": 0,
+    }
+
+    # Add player to scoreboard
+    scoreboard[peer_id] = {"points": 0, "games_won": 0}
+    
+def process_player_messages():
+    """Process all received player messages from the game_msg_in queue 
+    and update player movement directions."""
+    while True:
+        peer_id, msg = poll_server_msg_queue()
+        if peer_id == None and msg == None:
+            return
+        peer_id = str(peer_id)
+        if "move" in msg:
+            players[peer_id]["last_direction"] = msg["move"]
+
+
 # Server's game loop for handling movements every second
 def update_positions():
     gatherable_change = False
-    gatherable_counter = 0
     score_change = False
-    global new_player_joined
+    global new_player_joined, gamestate_clock
+    increment = 10
+
     while True:
-        increment = 10
         time.sleep(1 / 5)  # Move players every 1 second
+
+        if known_peers.get_leader() != node_id:
+            clear_server_messages()
+            continue
+
+        # Add any new peers to players
+        peers = known_peers.copy()
+        for peer_id in peers:
+            peer_id = str(peer_id)
+            if peer_id not in players:
+                create_new_player(peer_id)
+
+        sync_gamestate()
+        process_player_messages()
 
         # Update each player's position based on their last command
         for player_id, player_data in players.items():
@@ -147,37 +242,41 @@ def update_positions():
                 gatherable_change = True
                 spawn_x, spawn_y = spawn_gatherable(increment)
                 print(f"Gatherable spawned at: {spawn_x, spawn_y}")
-                # print(len(gatherables))
-                gatherable_counter = gatherable_counter + 1
-                gatherable_id = str(gatherable_counter + 1)
+                gatherable_counter = 0
+                if len(gatherables) > 0:
+                    gatherable_counter = int(max(gatherables.keys()))
+                gatherable_id = gatherable_counter + 1
                 gatherables[gatherable_id] = (spawn_x, spawn_y)
 
-        if gatherable_kill_check(spawn_x, spawn_y):
+        if gatherable_kill_check():
             score_change = True
         # print(len(gatherables))
 
-        # Broadcast updated positions to all clients
-        broadcast(json.dumps({"players": players}))
+        gamestate_clock = gamestate_clock + 1
+
+        # Always send at least these
+        gamestate_dict = {
+            "clock": gamestate_clock,
+            "players": players,
+        }
 
         # Broadcast gatherable location to all clients
-        # print(gatherables)
-        # print(new_player_joined)
         if gatherable_change or new_player_joined:
             print("Sending gatherable object info to clients")
-            broadcast(json.dumps({"gatherables": gatherables}))
+            gamestate_dict["gatherables"] = gatherables
             gatherable_change = False
             new_player_joined = False
-        else:
-            pass
 
         # Broadcast scoreboard when change happens
         if score_change:
             print("Sending scoreboard info to clients")
             print(scoreboard)
-            broadcast(json.dumps({"scoreboard": scoreboard}))
+            gamestate_dict["scoreboard"] = scoreboard
             score_change = False
-        else:
-            pass
+
+        # Broadcast updated positions to all clients
+        send_to_clients(gamestate_dict)
+        #broadcast(json.dumps(gamestate_dict))
 
 
 # Spawns gatherable objective
@@ -197,7 +296,7 @@ def spawn_gatherable(increment):
 
 
 # gatherable collision check for all players
-def gatherable_kill_check(gatherable_x, gatherable_y):
+def gatherable_kill_check():
     for player_id, player_data in players.items():
         for key in gatherables:
             gatherable_x = gatherables[key][0]
@@ -279,6 +378,13 @@ def border_check(coord, type, direction, increment):
             return False
 
 
+def start_server_thread() -> Thread:
+    """Starts the server thread, which only executes when this node is elected leader."""
+    server_thread = Thread(target=update_positions, daemon=True)
+    server_thread.start()
+    return server_thread
+
+
 # Main server function
 def start_server(HOST):
     # Server configurations
@@ -300,13 +406,3 @@ def start_server(HOST):
         # Start a new thread for each connected client
         thread = threading.Thread(target=handle_client, args=(client_socket,))
         thread.start()
-
-
-if __name__ == "__main__":
-    # Coordinate destrictions (client's pygame draws 600x400)
-    # X_MIN, X_MAX, Y_MIN, Y_MAX = 0, 580, 0, 380
-    # POINT_LIMIT = 5
-    # GATHERABLE_LIMIT = 3
-    # new_player_joined
-    # new_player_joined = False
-    start_server(HOST)

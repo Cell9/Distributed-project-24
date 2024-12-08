@@ -6,7 +6,7 @@ from logger import get_logger, logging
 import sys
 import uuid
 import json
-from queue import Queue
+from queue import Queue, Empty
 from os import getenv
 
 
@@ -97,17 +97,22 @@ class Peers:
 
 GAME_ID = "asdf"  # ID to send with the IP. TODO: come up with a better id.
 BULLY_MSG_TYPE = "b"
-GAME_MSG_TYPE = "g"
-VALID_MSG_TYPES = {BULLY_MSG_TYPE, GAME_MSG_TYPE}
+CLIENT_MSG_TYPE = "c"
+SERVER_MSG_TYPE = "s"
+VALID_MSG_TYPES = {BULLY_MSG_TYPE, CLIENT_MSG_TYPE, SERVER_MSG_TYPE}
 BULLY_ELECTION = "ELECT"
 BULLY_OK = "OK"
 BULLY_COORD = "COORD"
+SYNC_GAMESTATE = "SYNC"
+ADD_PLAYER = "ADD PLAYER"
 known_peers = Peers()  # For discovered peers/nodes
 node_id = uuid.uuid1()  # Generate a new unique node identifier
 logger = get_logger("network", logging.DEBUG)
 bully_msg_in = Queue()
-game_msg_in = Queue()
+client_msg_in = Queue()
+server_msg_in = Queue()
 all_msg_out = Queue()
+maintenance_msg_in = Queue()
 
 
 class Connection:
@@ -179,6 +184,40 @@ class Connection:
                 raise e
 
 
+def client_send_to_server(data):
+    """Send client data to the current server."""
+    leader_id = known_peers.get_leader()
+    if leader_id:
+        all_msg_out.put((leader_id, SERVER_MSG_TYPE, data))
+
+def send_to_clients(data):
+    """Send data to all the players, i.e. known peers."""
+    peers = known_peers.copy()
+    for peer_id in peers.keys():
+        all_msg_out.put((peer_id, CLIENT_MSG_TYPE, data))
+
+def clear_server_messages():
+    with server_msg_in.mutex:
+        server_msg_in.queue.clear()
+
+def poll_client_msg_queue(block=False):
+    """Gets a message from queue for inbound messages from server.
+    Returns (None, None) if there were no messages."""
+    try:
+        peer_id, msg = client_msg_in.get(block=block)
+        return peer_id, msg
+    except Empty:
+        return None, None
+
+def poll_server_msg_queue(block=False):
+    """Gets a (id, server message) tuple from queue for inbound messages from clients. 
+    Returns None,None if there were no messages."""
+    try:
+        peer_id, msg = server_msg_in.get(block=block)
+        return peer_id, msg
+    except Empty:
+        return None, None
+
 def get_local_ip():
     address = ""
     try:
@@ -230,8 +269,10 @@ def handle_peer_recv(peer_id: uuid.UUID, conn: Connection):
                 msg = json.loads(msg_raw)
                 if msg_type == BULLY_MSG_TYPE:
                     bully_msg_in.put((peer_id, msg))
-                else:
-                    game_msg_in.put((peer_id, msg))
+                elif msg_type == CLIENT_MSG_TYPE:
+                    client_msg_in.put((peer_id, msg))
+                elif msg_type == SERVER_MSG_TYPE:
+                    server_msg_in.put((peer_id, msg))
             except json.JSONDecodeError:
                 logger.error(f"Peer {peer_id} sent malformed JSON: {msg_raw}")
             except AttributeError as err:
@@ -246,6 +287,17 @@ def handle_peer_send():
     while True:
         # Get peer_id, msg type and the raw message from outgoing queue.
         peer_id, msg_type, msg_raw = all_msg_out.get()
+        
+        if peer_id == node_id:
+            # Send own messages directly back into incoming queues
+            if msg_type == BULLY_MSG_TYPE:
+                bully_msg_in.put((peer_id, msg_raw))
+            elif msg_type == CLIENT_MSG_TYPE:
+                client_msg_in.put((peer_id, msg_raw))
+            elif msg_type == SERVER_MSG_TYPE:
+                server_msg_in.put((peer_id, msg_raw))
+            continue
+
         try:
             conn = known_peers[peer_id]["conn"]  # Get the connection to peer
             msg_json = json.dumps(msg_raw)
@@ -434,6 +486,8 @@ def set_self_as_coordinator():
         if peer_id != node_id:
             send_bully_message(peer_id, BULLY_COORD)
     known_peers.set_leader(node_id)
+    # Make the server check for newer gamestates
+    maintenance_msg_in.put(SYNC_GAMESTATE)
 
 
 def bully2():
@@ -610,9 +664,9 @@ if __name__ == "__main__":
         start_broadcast_thread()
         while True:
             time.sleep(5)
-            send_to_all(GAME_MSG_TYPE, f"Hello from node {node_id}")
+            send_to_all(CLIENT_MSG_TYPE, f"Hello from node {node_id}")
             try:
-                peer_id, msg = game_msg_in.get(block=False)
+                peer_id, msg = client_msg_in.get(block=False)
                 logger.debug(f"Message received from {peer_id}: {msg}")
             except Exception:
                 pass
