@@ -3,11 +3,7 @@ import pygame  # Library for creating graphical interface
 import time
 from logger import get_logger, logging
 from network import (
-    start_broadcast_thread,
-    start_broadcast_listening_thread,
-    start_peer_listening_thread,
-    start_peer_send_thread,
-    start_bully_thread,
+    start_network_threads,
     node_id,
     client_send_to_server,
     poll_client_msg_queue,
@@ -113,11 +109,7 @@ def check_leader(current_leader: UUID, previous_key) -> UUID:
 
 # Main client function with pygame loop
 def start_client():
-    start_peer_listening_thread()
-    start_peer_send_thread()
-    start_broadcast_listening_thread()
-    start_broadcast_thread()
-    start_bully_thread()
+    start_network_threads()
     start_server_thread()
 
     # Main game loop
