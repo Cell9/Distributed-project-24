@@ -251,11 +251,11 @@ def update_positions():
         while len(gatherables) < GATHERABLE_LIMIT:
             gatherable_change = True
             spawn_x, spawn_y = spawn_gatherable(increment)
-            print(f"Gatherable spawned at: {spawn_x, spawn_y}")
             gatherable_counter = 0
             if len(gatherables) > 0:
-                gatherable_counter = max(gatherables.keys())
-            gatherable_id = int(gatherable_counter) + 1
+                gatherable_counter = max([int(key) for key in gatherables.keys()])
+            gatherable_id = gatherable_counter + 1
+            logger.debug(f"Gatherable spawned at: {spawn_x, spawn_y} with ID: {gatherable_id}")
             gatherables[str(gatherable_id)] = (spawn_x, spawn_y)
 
         if gatherable_kill_check():
