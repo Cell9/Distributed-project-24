@@ -141,12 +141,19 @@ class Connection:
         # message print for testing purposes
         # print(f"sent message: {msg}")
 
-    def receive_message(self) -> str:
-        # first we need to receive header for length information
+    def receive_message(self, timeout=None) -> str:
+        # first we need to receive header for length information 
         while len(self.buffer_in) < 4 and self.data_counter == 0:
             # print for testing purposes
             # print(self.buffer_in, self.data_counter)
-            self.buffer_in.extend(self.sock.recv(4 - len(self.buffer_in)))
+            if timeout: 
+                self.sock.settimeout(timeout)
+            bytes = self.sock.recv(4 - len(self.buffer_in))
+            
+            if len(bytes) == 0:
+                raise TimeoutError
+            
+            self.buffer_in.extend(bytes)
             # we have full header
             if len(self.buffer_in) == 4:
                 self.data_counter = struct.unpack("!L", self.buffer_in)[0]
@@ -265,7 +272,14 @@ def handle_peer_recv(peer_id: uuid.UUID, conn: Connection):
     logger.debug(f"Starting to receive messages from peer {peer_id}")
     try:
         while True:
-            msg_raw = conn.receive_message()
+            try:
+                msg_raw = conn.receive_message(timeout=30)
+            except TimeoutError:
+                # Drop connection if the peer hasn't been heard of in 30s
+                if time.time() - known_peers[peer_id]["ts"] > 30:
+                    known_peers[peer_id]["conn"].sock.close()
+                    raise ConnectionResetError
+                continue
             try:
                 msg_type, msg_raw = get_msg_type(msg_raw)
                 msg = json.loads(msg_raw)
