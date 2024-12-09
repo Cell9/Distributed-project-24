@@ -23,3 +23,15 @@ After a short peer discovery period, the client starts running the bully algorit
 - If the client doesn't receive an `OK` message or a `COORDINATOR` message after waiting, it times out and either sets itself as the coordinator, if it was still waiting for an `OK`, or starts a new election, if it was waiting for a `COORDINATOR` message.
 
 The application's TCP messaging uses a simple protocol, which attaches a length header to each sent message to indicate when the message ends. This is used for both the bully algorithm and the client-server game communication. The game server communication uses JSON.
+
+The JSON objects sent by the server may contain the following keys:
+
+- `sync_gamestate`, which contains the server's logical clock and asks for clients to relay any possible newer game states to the server. This would be the only value sent in the message when the server host changes.
+- `clock`, containing the server's current logical clock value.
+- `players`, containing the player positions.
+- `gatherables`, containing the goal object positions.
+- `scoreboard`, containing the player scores.
+
+On every server tick, the server will send the `clock`, and `players` values, but the `gatherables` and `scoreboard` values are only set when they are updated. The client communicates back to the server by sending movement directions with JSON, and may also relay the full game state back as an answer to `sync_gamestate`.
+
+State is shared between the client and server, as movement commands only point out the direction the player is moving towards. Synchronization and consistency are enabled via logical clocks, which are used for deciding what the newest game state is. There is no explicit need for a consensus as the server host handles all game logic, but when it crashes, the logical clock helps restore the correct game state. Node discovery is implemented via broadcasting in the local network, which is used to gather the list for appointing a leader. The game has fault tolerance in the form of choosing a new leader whenever the current server host crashes. There is no specific mechanism for improved scalability as only one node can act as the server at a time.
