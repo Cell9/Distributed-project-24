@@ -45,3 +45,4 @@ The project consists of 4 different modules,
 - `network.py` has all network related functionality, and the bully algorithm implementation. Networking is heavily threaded, with separate threads for broadcasting, listening to broadcasts, sending to all peers, listening for new peer connections, individual threads for handling receiving from different peers, and the bully algorithm. Due to the heavily threaded nature of the program, known peers are stored in a Peers object that protects the underlying data structure using a Python RLock.
 - `logger.py` is a tiny module for making new Python `logging` module's Logger objects used for printing messages to the console. You can turn off debug mode to get less messages.
 
+![](materials/project_overview.jpg)
